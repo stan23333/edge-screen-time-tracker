@@ -2,8 +2,6 @@
 
 [中文文档](README.zh-CN.md) | English
 
-<img src="docs/assets/logo.png" alt="Web Screen Time Tracker logo" style="zoom:50%;" />
-
 Web Screen Time Tracker is a Microsoft Edge / Chromium Manifest V3 extension for recording browser activity, page visits, page summaries, and AI-assisted behavior analysis.
 
 This project was designed and developed through an iterative collaboration between the user and Codex / GPT-5.5. Codex / GPT-5.5 is not a runtime dependency; it was the engineering assistant used to design, implement, review, and refine the extension.
