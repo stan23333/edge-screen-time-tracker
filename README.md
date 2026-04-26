@@ -26,7 +26,6 @@ Only the logo, popup, and dashboard are embedded here to keep the README readabl
 
 ### Popup
 
-![Popup screenshot](docs/screenshots/popup1.png)
 
 ![Popup detail screenshot](docs/screenshots/popup2.png)
 
