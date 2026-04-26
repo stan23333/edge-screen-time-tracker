@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Web Screen Time Tracker</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="popup">
+      <header class="header">
+        <div>
+          <p class="eyebrow">Web Screen Time</p>
+          <h1>Today</h1>
+          <span id="timezoneLabel" class="timezoneLabel">Timezone: System</span>
+        </div>
+        <span id="statusBadge" class="badge">Active</span>
+      </header>
+
+      <section class="summaryGrid">
+        <article class="metricCard activeCard">
+          <span>Active total</span>
+          <strong id="totalTime">00:00:00</strong>
+        </article>
+        <article class="metricCard activeCard">
+          <span>Current active</span>
+          <strong id="activeTotal">00:00:00</strong>
+        </article>
+      </section>
+
+      <section class="chartCard">
+        <div id="usageRing" class="usageRing" aria-label="Today usage chart">
+          <div>
+            <strong id="ringRatio">0%</strong>
+            <span>Active</span>
+          </div>
+        </div>
+        <div class="chartInfo">
+          <p class="label">Current share</p>
+          <strong id="chartRatio">0%</strong>
+          <span>Current / Today active</span>
+          <div class="chartLegend">
+            <span><i class="legendActive"></i>Current</span>
+            <span><i class="legendOpen"></i>Other</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="progressCard">
+        <div class="progressRow">
+          <div class="progressMeta">
+            <span>Current open</span>
+            <strong id="openProgressText">00:00:00</strong>
+          </div>
+          <div class="progressTrack"><span id="openProgressBar" class="openProgressBar"></span></div>
+        </div>
+        <div class="progressRow">
+          <div class="progressMeta">
+            <span>Current active</span>
+            <strong id="activeProgressText">00:00:00</strong>
+          </div>
+          <div class="progressTrack"><span id="activeProgressBar" class="activeProgressBar"></span></div>
+        </div>
+      </section>
+
+      <section class="current">
+        <p class="label">Current site</p>
+        <strong id="currentDomain">No active site</strong>
+        <div class="metricPair">
+          <span id="currentOpenTime">Open 00:00:00</span>
+          <span id="currentTime">Active 00:00:00</span>
+        </div>
+      </section>
+
+      <section class="topSection">
+        <div class="sectionTitle">
+          <h2>Top sites</h2>
+          <span>Top 2</span>
+        </div>
+        <ol id="topSites" class="siteList"></ol>
+        <p id="emptyState" class="empty">No tracked browsing time yet.</p>
+      </section>
+
+      <div id="ignoreMenu" class="ignoreMenu" hidden>
+        <button id="ignoreThisTime" type="button">Ignore this time</button>
+        <button id="ignoreAllTime" type="button">Ignore all time</button>
+      </div>
+
+      <footer class="actions">
+        <button id="ignoreCurrentSite" type="button">Ignore</button>
+        <button id="openDashboard" type="button" class="secondary">Details</button>
+      </footer>
+    </main>
+    <script src="../utils/time.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

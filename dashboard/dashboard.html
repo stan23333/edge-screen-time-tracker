@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Web Screen Time Dashboard</title>
+    <link rel="stylesheet" href="dashboard.css">
+  </head>
+  <body>
+    <main class="appShell">
+      <header class="topbar">
+        <div class="brandBlock">
+          <img class="mark" src="../assets/icon128.png" alt="">
+          <div>
+            <p class="eyebrow">Web Screen Time Tracker</p>
+            <h1>Usage analytics</h1>
+            <span id="timezoneLabel" class="timezoneLabel">Timezone: System</span>
+          </div>
+        </div>
+        <div class="controls">
+          <input id="datePicker" type="date">
+          <a class="navLink" href="../records/records.html">Records</a>
+          <a class="navLink" href="../analysis/analysis.html">Analysis</a>
+          <a class="navLink" href="../settings/settings.html">Settings</a>
+          <button id="exportJson" type="button">Export</button>
+          <button id="clearDate" type="button" class="danger">Clear</button>
+        </div>
+      </header>
+
+      <section class="overview">
+        <article class="headlineMetric">
+          <div>
+            <p id="trackingMode" class="eyebrow">Active usage</p>
+            <strong id="totalTime">00:00:00</strong>
+            <span id="secondaryTime">Focused browsing time</span>
+          </div>
+          <div class="donutWrap">
+            <div id="donut" class="donut"></div>
+            <div>
+              <p>Top active share</p>
+              <strong id="donutShare">0%</strong>
+              <span id="donutDomain">None</span>
+            </div>
+          </div>
+        </article>
+
+        <article class="miniMetric">
+          <span>Longest active site</span>
+          <strong id="longestSite">None</strong>
+          <small id="longestTime">00:00:00</small>
+        </article>
+
+        <article class="miniMetric">
+          <span>Tracked sites</span>
+          <strong id="siteCount">0</strong>
+          <small id="chartMetric">Active ranked</small>
+        </article>
+      </section>
+
+      <section class="workspace">
+        <section class="rankPane">
+          <div class="sectionHeader">
+            <div>
+              <p class="eyebrow">Ranked by active usage</p>
+              <h2>Websites</h2>
+            </div>
+            <div class="legend">
+              <span><i class="legendOpen"></i>Open</span>
+              <span><i class="legendActive"></i>Active</span>
+            </div>
+          </div>
+          <div id="barChart" class="barChart"></div>
+          <p id="emptyState" class="empty">No data for this day.</p>
+          <table>
+            <thead>
+              <tr>
+                <th>Site</th>
+                <th>Active</th>
+                <th>Open</th>
+                <th>Active Share</th>
+              </tr>
+            </thead>
+            <tbody id="siteTable"></tbody>
+          </table>
+        </section>
+
+        <aside class="detailPane">
+          <div class="selectedHeader">
+            <div>
+              <p class="eyebrow">Selected website</p>
+              <h2 id="selectedSiteTitle">Select a Site</h2>
+            </div>
+            <div class="selectedActions">
+              <strong id="selectedSiteTotal">00:00:00</strong>
+              <button id="ignoreSelectedSite" type="button">Ignore</button>
+            </div>
+          </div>
+
+          <div class="heatmapBlock focusBlock">
+            <div class="sectionHeader compact">
+              <div>
+                <p class="eyebrow">Single site</p>
+                <h3>Usage</h3>
+              </div>
+              <span class="hint">120 days</span>
+            </div>
+            <div id="siteHeatmap" class="heatmap"></div>
+          </div>
+
+          <div class="heatmapBlock">
+            <div class="sectionHeader compact">
+              <div>
+                <p class="eyebrow">Daily usage</p>
+                <h3>Active time</h3>
+              </div>
+            </div>
+            <div id="activeHeatmap" class="heatmap"></div>
+          </div>
+
+          <div class="heatmapBlock">
+            <div class="sectionHeader compact">
+              <div>
+                <p class="eyebrow">Overall time</p>
+                <h3>Open time</h3>
+              </div>
+            </div>
+            <div id="openHeatmap" class="heatmap"></div>
+          </div>
+        </aside>
+      </section>
+    </main>
+    <script src="../utils/time.js"></script>
+    <script src="dashboard.js"></script>
+  </body>
+</html>

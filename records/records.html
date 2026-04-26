@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Browsing Records</title>
+    <link rel="stylesheet" href="records.css">
+  </head>
+  <body>
+    <main class="page">
+      <header class="topbar">
+        <div class="brandBlock">
+          <img class="mark" src="../assets/icon128.png" alt="">
+          <div>
+            <p class="eyebrow">Web Screen Time Tracker</p>
+            <h1>Records</h1>
+            <span id="timezoneLabel" class="timezoneLabel">Timezone: System</span>
+          </div>
+        </div>
+        <nav>
+          <a href="../dashboard/dashboard.html">Dashboard</a>
+          <a href="../analysis/analysis.html">Analysis</a>
+          <a href="../settings/settings.html">Settings</a>
+        </nav>
+      </header>
+
+      <section class="controls panel">
+        <div class="rangeButtons" role="group" aria-label="Date range">
+          <button class="active" type="button" data-range="1">Today</button>
+          <button type="button" data-range="7">7 days</button>
+          <button type="button" data-range="30">30 days</button>
+        </div>
+        <label>End date<input id="endDate" type="date"></label>
+        <button id="refreshData" type="button">Refresh</button>
+        <button id="exportData" type="button" class="secondary">Export JSON</button>
+      </section>
+
+      <section class="metricGrid">
+        <article class="metricCard blue">
+          <span>Active time</span>
+          <strong id="activeTotal">00:00:00</strong>
+        </article>
+        <article class="metricCard purple">
+          <span>Summaries</span>
+          <strong id="summaryTotal">0</strong>
+        </article>
+        <article class="metricCard peach">
+          <span>Tokens</span>
+          <strong id="tokenTotal">0</strong>
+        </article>
+        <article class="metricCard mint">
+          <span>Open context</span>
+          <strong id="openTotal">00:00:00</strong>
+        </article>
+      </section>
+
+      <section class="visualGrid">
+        <article class="panel chartPanel">
+          <div class="sectionHeader">
+            <div>
+              <p class="eyebrow">Website statistics</p>
+              <h2>Open and active time</h2>
+            </div>
+            <div class="legend">
+              <span><i class="openDot"></i>Open</span>
+              <span><i class="activeDot"></i>Active</span>
+            </div>
+          </div>
+          <div id="siteBars" class="siteBars"></div>
+          <p id="emptyState" class="empty">No saved records for this range.</p>
+        </article>
+
+        <aside class="panel sidePanel">
+          <p class="eyebrow">Token usage</p>
+          <h2>LLM usage</h2>
+          <p id="llmEmptyState" class="emptyInline">No LLM activity in this date range.</p>
+          <div id="summaryDiagnostic" class="diagnosticBox">Summary status loading...</div>
+          <div class="tokenRingWrap">
+            <div id="tokenRing" class="tokenRing"></div>
+            <div>
+              <strong id="summaryTokens">0</strong>
+              <span>summary tokens</span>
+              <strong id="analysisTokens">0</strong>
+              <span>analysis tokens</span>
+            </div>
+          </div>
+          <div class="statusList">
+            <p><span id="requestCount">0</span> requests</p>
+            <p><span id="pendingCount">0</span> pending</p>
+            <p><span id="capturingCount">0</span> capturing</p>
+            <p><span id="summarizingCount">0</span> summarizing</p>
+            <p><span id="doneCount">0</span> done</p>
+            <p><span id="errorCount">0</span> errors</p>
+            <p><span id="unknownUsageCount">0</span> usage missing</p>
+          </div>
+        </aside>
+      </section>
+
+      <section class="detailGrid">
+        <article class="panel">
+          <div class="sectionHeader">
+            <div>
+              <p class="eyebrow">Selected website</p>
+              <h2 id="selectedDomain">All websites</h2>
+            </div>
+            <button id="clearSelection" type="button" class="secondary">All</button>
+          </div>
+          <div id="visitList" class="visitList"></div>
+        </article>
+
+        <article class="panel">
+          <div class="sectionHeader">
+            <div>
+              <p class="eyebrow">Summary JSON</p>
+              <h2 id="summaryTitle">Latest summary</h2>
+            </div>
+          </div>
+          <pre id="summaryJson">Select a summarized visit.</pre>
+        </article>
+      </section>
+    </main>
+    <script src="../utils/time.js"></script>
+    <script src="records.js"></script>
+  </body>
+</html>

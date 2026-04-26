@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Tracker Settings</title>
+    <link rel="stylesheet" href="settings.css">
+  </head>
+  <body>
+    <main class="page">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Web Screen Time Tracker</p>
+          <h1>Settings</h1>
+        </div>
+        <nav>
+          <a href="../dashboard/dashboard.html">Dashboard</a>
+          <a href="../records/records.html">Records</a>
+          <a href="../analysis/analysis.html">Analysis</a>
+        </nav>
+      </header>
+
+      <section class="grid">
+        <form id="settingsForm" class="settingsStack">
+          <div class="panel configSection">
+            <div class="sectionTop">
+              <h2>Page Summary Model</h2>
+              <div class="testRow">
+                <span><i id="summaryTestLight" class="light"></i>Summary API</span>
+                <button id="testSummaryModel" type="button" class="secondary">Test</button>
+              </div>
+            </div>
+            <div class="fieldGrid">
+              <label>Provider
+                <select id="summaryProvider">
+                  <option value="openai">OpenAI</option>
+                  <option value="openrouter">OpenRouter</option>
+                  <option value="siliconflow">SiliconFlow</option>
+                  <option value="ollama">Ollama</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </label>
+              <label>Base URL<input id="summaryBaseUrl" list="baseUrlPresets" type="url" placeholder="https://api.openai.com/v1"></label>
+              <label>API Key<input id="summaryApiKey" type="password" autocomplete="off"></label>
+              <label>Model<input id="summaryModel" type="text" placeholder="gpt-4.1-mini"></label>
+            </div>
+            <p class="helperText">SiliconFlow uses https://api.siliconflow.com/v1. DeepSeek R1/V3 models do not support JSON mode, so structured summaries fall back to prompt JSON automatically.</p>
+            <label>Prompt<textarea id="summaryPrompt" rows="5"></textarea></label>
+          </div>
+
+          <div class="panel configSection">
+            <div class="sectionTop">
+              <h2>Analysis Model</h2>
+              <div class="testRow">
+                <span><i id="analysisTestLight" class="light"></i>Analysis API</span>
+                <button id="testAnalysisModel" type="button" class="secondary">Test</button>
+              </div>
+            </div>
+            <div class="fieldGrid">
+              <label>Provider
+                <select id="analysisProvider">
+                  <option value="openai">OpenAI</option>
+                  <option value="openrouter">OpenRouter</option>
+                  <option value="siliconflow">SiliconFlow</option>
+                  <option value="ollama">Ollama</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </label>
+              <label>Base URL<input id="analysisBaseUrl" list="baseUrlPresets" type="url" placeholder="https://api.openai.com/v1"></label>
+              <label>API Key<input id="analysisApiKey" type="password" autocomplete="off"></label>
+              <label>Model<input id="analysisModel" type="text" placeholder="gpt-4.1"></label>
+            </div>
+            <label>Daily Prompt<textarea id="dailyPrompt" rows="4"></textarea></label>
+            <label>Weekly Prompt<textarea id="weeklyPrompt" rows="4"></textarea></label>
+            <label>Monthly Prompt<textarea id="monthlyPrompt" rows="4"></textarea></label>
+          </div>
+
+          <div class="panel configSection">
+            <h2>Capture</h2>
+            <label class="checkbox"><input id="autoSummarize" type="checkbox"> Auto summarize pages when they finish loading</label>
+            <label>Max content characters<input id="maxContentChars" type="number" min="1000" step="1000"></label>
+          </div>
+
+          <div class="panel configSection">
+            <h2>Ignored Domains</h2>
+            <label>Ignored domains<textarea id="ignoredDomains" rows="4" placeholder="example.com&#10;news.example.com"></textarea></label>
+          </div>
+
+          <div class="panel configSection">
+            <div class="sectionTop">
+              <h2>WebDAV Backup</h2>
+              <div class="testRow">
+                <span><i id="webdavTestLight" class="light"></i>WebDAV</span>
+                <button id="testWebdav" type="button" class="secondary">Test</button>
+              </div>
+            </div>
+            <label>WebDAV URL<input id="webdavUrl" type="url" placeholder="https://example.com/dav/folder"></label>
+            <div class="fieldGrid">
+              <label>Username<input id="webdavUsername" type="text"></label>
+              <label>Password<input id="webdavPassword" type="password" autocomplete="off"></label>
+            </div>
+            <label>Backup folder<input id="webdavPath" type="text" placeholder="browser-tracker"></label>
+            <p class="helperText">Weekly archives are uploaded after analysis to weeks/YYYY-Www.json.</p>
+          </div>
+
+          <div class="panel actions">
+            <button type="submit">Save Settings</button>
+          </div>
+        </form>
+
+        <datalist id="baseUrlPresets">
+          <option value="https://api.openai.com/v1"></option>
+          <option value="https://openrouter.ai/api/v1"></option>
+          <option value="https://api.siliconflow.com/v1"></option>
+          <option value="https://api.siliconflow.cn/v1"></option>
+          <option value="http://localhost:11434/v1"></option>
+        </datalist>
+
+        <aside class="panel statusPanel">
+          <h2>Status</h2>
+          <p id="statusText">Ready.</p>
+          <button id="summarizeNow" type="button">Summarize Current Page</button>
+          <button id="backupNow" type="button" class="secondary">Backup Now</button>
+          <button id="exportData" type="button" class="secondary">Export Full JSON</button>
+        </aside>
+      </section>
+    </main>
+    <script src="settings.js"></script>
+  </body>
+</html>

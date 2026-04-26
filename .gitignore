@@ -1,0 +1,12 @@
+.DS_Store
+**/.DS_Store
+*.log
+.env
+.env.*
+*.local
+
+# Local exports/backups may contain private browsing data or credentials.
+*backup*.json
+*export*.json
+browser-tracker-*.json
+web-screen-time-full-*.json

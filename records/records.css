@@ -1,0 +1,528 @@
+:root {
+  color-scheme: light;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --bg: #f5f7fb;
+  --panel: #ffffff;
+  --ink: #18202f;
+  --muted: #687386;
+  --line: #dfe6f0;
+  --blue: #2f6df6;
+  --blue-soft: #eaf1ff;
+  --green: #21a365;
+  --green-soft: #e7f7ee;
+  --purple: #7c3aed;
+  --purple-soft: #f1eaff;
+  --peach: #d97706;
+  --peach-soft: #fff1df;
+  --open: #334155;
+  --active: #32d073;
+  --shadow: 0 18px 48px rgba(42, 51, 68, 0.10);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  color: var(--ink);
+  background:
+    linear-gradient(135deg, rgba(47, 109, 246, 0.12), transparent 36%),
+    linear-gradient(180deg, #fcfdff 0%, var(--bg) 100%);
+}
+
+.page {
+  width: min(1320px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 28px 0 48px;
+}
+
+.topbar,
+.brandBlock,
+nav,
+.controls,
+.sectionHeader,
+.legend,
+.tokenRingWrap {
+  display: flex;
+}
+
+.topbar {
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 18px;
+}
+
+.brandBlock {
+  align-items: center;
+  gap: 14px;
+}
+
+.mark {
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: var(--shadow);
+}
+
+.eyebrow {
+  margin: 0 0 5px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.timezoneLabel {
+  display: block;
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 34px;
+  line-height: 1;
+}
+
+h2 {
+  font-size: 18px;
+}
+
+nav {
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+a,
+button,
+input {
+  min-height: 40px;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 850;
+}
+
+a,
+button.secondary {
+  border: 1px solid var(--line);
+  background: #ffffff;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+a {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 12px;
+}
+
+button {
+  border: 1px solid var(--ink);
+  padding: 0 14px;
+  background: var(--ink);
+  color: #ffffff;
+  cursor: pointer;
+}
+
+input {
+  border: 1px solid #cbd5e1;
+  padding: 0 12px;
+  background: #ffffff;
+  color: var(--ink);
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.panel,
+.metricCard {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: var(--shadow);
+}
+
+.panel {
+  padding: 18px;
+}
+
+.controls {
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.rangeButtons {
+  display: inline-flex;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 4px;
+  background: #ffffff;
+}
+
+.rangeButtons button {
+  min-height: 34px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+
+.rangeButtons button.active {
+  background: var(--ink);
+  color: #ffffff;
+}
+
+.metricGrid,
+.visualGrid,
+.detailGrid {
+  display: grid;
+  gap: 14px;
+}
+
+.metricGrid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 14px;
+}
+
+.metricCard {
+  min-width: 0;
+  padding: 18px;
+}
+
+.metricCard span,
+.tokenRingWrap span,
+.statusList p {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.metricCard strong {
+  display: block;
+  margin-top: 12px;
+  font-size: 28px;
+  font-variant-numeric: tabular-nums;
+}
+
+.metricCard.mint {
+  background: var(--green-soft);
+}
+
+.metricCard.blue {
+  background: var(--blue-soft);
+}
+
+.metricCard.purple {
+  background: var(--purple-soft);
+}
+
+.metricCard.peach {
+  background: var(--peach-soft);
+}
+
+.visualGrid {
+  grid-template-columns: minmax(0, 1fr) 360px;
+  align-items: stretch;
+  margin-bottom: 14px;
+}
+
+.detailGrid {
+  grid-template-columns: minmax(0, 1fr) 420px;
+  align-items: start;
+}
+
+.sectionHeader {
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.legend {
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend i {
+  width: 18px;
+  height: 8px;
+  border-radius: 999px;
+}
+
+.openDot {
+  background: var(--open);
+}
+
+.activeDot {
+  background: var(--active);
+}
+
+.siteBars {
+  display: grid;
+  gap: 10px;
+}
+
+.barRow {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.34fr) minmax(140px, 1fr) 120px;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 8px;
+  cursor: pointer;
+}
+
+.barRow:hover,
+.barRow.selected {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+
+.barLabel,
+.barTime {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.barTime {
+  color: var(--muted);
+  text-align: right;
+}
+
+.barTrack {
+  position: relative;
+  height: 16px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e5eaf1;
+}
+
+.barOpen,
+.barActive {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+}
+
+.barOpen {
+  background: var(--open);
+  opacity: 0.72;
+}
+
+.barActive {
+  background: var(--active);
+}
+
+.empty {
+  display: none;
+  color: var(--muted);
+  font-weight: 850;
+}
+
+.emptyInline {
+  display: none;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 850;
+  line-height: 1.45;
+}
+
+.diagnosticBox {
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #fbfcff;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.45;
+}
+
+.tokenRingWrap {
+  align-items: center;
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.tokenRing {
+  width: 118px;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: conic-gradient(var(--purple) 0deg, #e6eaf0 0deg);
+  position: relative;
+}
+
+.tokenRing::after {
+  content: "";
+  position: absolute;
+  inset: 24px;
+  border-radius: 50%;
+  background: #ffffff;
+}
+
+.tokenRingWrap strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 28px;
+  line-height: 1;
+}
+
+.statusList {
+  display: grid;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.statusList p {
+  display: flex;
+  justify-content: space-between;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #fbfcff;
+}
+
+.visitList {
+  display: grid;
+  gap: 10px;
+  max-height: 540px;
+  overflow: auto;
+}
+
+.visitItem {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  background: #fbfcff;
+}
+
+.visitItem button {
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+}
+
+.visitTitle {
+  display: block;
+  overflow: hidden;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.visitMeta {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.statusPill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  margin-top: 8px;
+  border-radius: 999px;
+  padding: 0 9px;
+  background: #e5e7eb;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.statusPill.done {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.statusPill.error {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+pre {
+  overflow: auto;
+  min-height: 540px;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+  background: #fbfcff;
+  color: var(--ink);
+  font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 980px) {
+  .topbar,
+  .visualGrid,
+  .detailGrid {
+    display: block;
+  }
+
+  nav {
+    margin-top: 14px;
+  }
+
+  .metricGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .sidePanel,
+  .detailGrid > .panel + .panel {
+    margin-top: 14px;
+  }
+}
+
+@media (max-width: 640px) {
+  .metricGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .barRow {
+    grid-template-columns: 1fr;
+  }
+
+  .barTime {
+    text-align: left;
+  }
+}

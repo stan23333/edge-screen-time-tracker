@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "Web Screen Time Tracker",
+  "description": "Track actual active browsing time by domain in Microsoft Edge and Chromium browsers.",
+  "version": "0.1.0",
+  "icons": {
+    "16": "assets/icon16.png",
+    "48": "assets/icon48.png",
+    "128": "assets/icon128.png"
+  },
+  "permissions": [
+    "tabs",
+    "storage",
+    "idle",
+    "alarms",
+    "scripting",
+    "contextMenus"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Web Screen Time Tracker",
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "assets/icon16.png",
+      "48": "assets/icon48.png",
+      "128": "assets/icon128.png"
+    }
+  },
+  "options_page": "settings/settings.html"
+}
