@@ -37,9 +37,12 @@ Web Screen Time Tracker 是一个 Microsoft Edge / Chromium Manifest V3 浏览�
   <img src="docs/screenshots/dashboard.jpeg" alt="Dashboard 截图" width="520" />
 </p>
 
+
+### Records
+
+![Records screenshot](docs/screenshots/records.jpeg)
 其它截图：
 
-- Records：`docs/screenshots/records.jpeg`
 - Settings：`docs/screenshots/settings.jpeg`
 
 ## 核心概念
