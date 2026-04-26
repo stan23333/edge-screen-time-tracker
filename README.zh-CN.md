@@ -2,7 +2,6 @@
 
 中文 | [English](README.md)
 
-<img src="docs/assets/logo.png" alt="Web Screen Time Tracker Logo" style="zoom:25%;" />
 
 Web Screen Time Tracker 是一个 Microsoft Edge / Chromium Manifest V3 浏览器插件，用来记录浏览器活动、页面访问时间线、页面摘要，以及 AI 行为分析报告。
 
