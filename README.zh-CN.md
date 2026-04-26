@@ -28,11 +28,15 @@ Web Screen Time Tracker 是一个 Microsoft Edge / Chromium Manifest V3 浏览�
 
 
 
-<img src="docs/screenshots/popup2.png" alt="Popup 详情截图" width="50%" />
+<p align="center">
+  <img src="docs/screenshots/popup2.png" alt="Popup 详情截图" width="320" />
+</p>
 
 ### Dashboard
 
-<img src="docs/screenshots/dashboard.jpeg" alt="Dashboard 截图" width="50%" />
+<p align="center">
+  <img src="docs/screenshots/dashboard.jpeg" alt="Dashboard 截图" width="520" />
+</p>
 
 其它截图：
 
