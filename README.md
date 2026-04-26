@@ -20,20 +20,26 @@ This extension started as a browser usage tracker, but the long-term goal is a p
 
 ## Screenshots
 
-Only the logo, popup, and dashboard are embedded here to keep the README readable. More screenshots are available in `docs/screenshots/`.
+Only the popup, dashboard and Records are embedded here to keep the README readable. More screenshots are available in `docs/screenshots/`.
 
 ### Popup
-
-
-![Popup detail screenshot](docs/screenshots/popup2.png)
+<p align="center">
+  <img src="docs/screenshots/popup2.png" alt="Popup 详情截图" width="320" />
+</p>
 
 ### Dashboard
 
-![Dashboard screenshot](docs/screenshots/dashboard.jpeg)
+<p align="center">
+  <img src="docs/screenshots/dashboard.jpeg" alt="Dashboard 截图" width="520" />
+</p>
+
 
 ### Records
 
-![Records screenshot](docs/screenshots/records.jpeg)
+<p align="center">
+  <img src="docs/screenshots/records.jpeg" alt="Records 截图" width="520" />
+</p>
+
 
 Additional screenshots:
 - Settings: `docs/screenshots/settings.jpeg`
