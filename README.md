@@ -31,9 +31,11 @@ Only the logo, popup, and dashboard are embedded here to keep the README readabl
 
 ![Dashboard screenshot](docs/screenshots/dashboard.jpeg)
 
-Additional screenshots:
+### Records
 
-- Records: `docs/screenshots/records.jpeg`
+![Records screenshot](docs/screenshots/records.jpeg)
+
+Additional screenshots:
 - Settings: `docs/screenshots/settings.jpeg`
 
 ## Core Ideas
