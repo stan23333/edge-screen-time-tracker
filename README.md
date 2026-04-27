@@ -2,8 +2,6 @@
 
 [中文文档](README.zh-CN.md) | English
 
-<img src="docs/assets/logo.png" alt="Web Screen Time Tracker logo" style="zoom:50%;" />
-
 Web Screen Time Tracker is a Microsoft Edge / Chromium Manifest V3 extension for recording browser activity, page visits, page summaries, and AI-assisted behavior analysis.
 
 This project was designed and developed through an iterative collaboration between the user and Codex / GPT-5.5. Codex / GPT-5.5 is not a runtime dependency; it was the engineering assistant used to design, implement, review, and refine the extension.
@@ -22,21 +20,28 @@ This extension started as a browser usage tracker, but the long-term goal is a p
 
 ## Screenshots
 
-Only the logo, popup, and dashboard are embedded here to keep the README readable. More screenshots are available in `docs/screenshots/`.
+Only the popup, dashboard and Records are embedded here to keep the README readable. More screenshots are available in `docs/screenshots/`.
 
 ### Popup
-
-![Popup screenshot](docs/screenshots/popup1.png)
-
-![Popup detail screenshot](docs/screenshots/popup2.png)
+<p align="center">
+  <img src="docs/screenshots/popup2.png" alt="Popup 详情截图" width="320" />
+</p>
 
 ### Dashboard
 
-![Dashboard screenshot](docs/screenshots/dashboard.jpeg)
+<p align="center">
+  <img src="docs/screenshots/dashboard.jpeg" alt="Dashboard 截图" width="520" />
+</p>
+
+
+### Records
+
+<p align="center">
+  <img src="docs/screenshots/records.jpeg" alt="Records 截图" width="520" />
+</p>
+
 
 Additional screenshots:
-
-- Records: `docs/screenshots/records.jpeg`
 - Settings: `docs/screenshots/settings.jpeg`
 
 ## Core Ideas
