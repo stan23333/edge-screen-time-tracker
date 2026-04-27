@@ -2,6 +2,7 @@ importScripts("utils/time.js", "utils/url.js", "utils/storage.js");
 
 const IDLE_THRESHOLD_SECONDS = 300;
 const CHECKPOINT_ALARM = "checkpoint-active-session";
+const SUSPEND_GAP_MS = 10 * 60 * 1000;
 const IGNORE_DOMAIN_MENU = "ignore-current-website";
 const METRICS = {
   ACTIVE: "activeSeconds",
@@ -111,7 +112,15 @@ async function setupContextMenus() {
 }
 
 function enqueueOperation(task) {
-  const next = operationQueue.then(task, task);
+  const wrappedTask = async () => {
+    await reconcileSuspendedHeartbeat();
+    try {
+      return await task();
+    } finally {
+      await touchHeartbeat();
+    }
+  };
+  const next = operationQueue.then(wrappedTask, wrappedTask);
   operationQueue = next.catch((error) => {
     console.error("Tracker operation failed", error);
   });
@@ -237,7 +246,7 @@ function addInterval(bucket, dateKey, domain, interval) {
   bucket[dateKey][domain].push(interval);
 }
 
-function rebuildDailyStatsFromVisits(visitEvents) {
+function rebuildDailyStatsFromVisits(visitEvents, liveVisitIds = new Set(), now = Date.now()) {
   const openIntervals = {};
   const activeIntervals = {};
 
@@ -247,9 +256,12 @@ function rebuildDailyStatsFromVisits(visitEvents) {
         continue;
       }
 
-      const openEnd = event.closedAt || (event.openSeconds ? event.openedAt + event.openSeconds * 1000 : Date.now());
-      for (const interval of splitIntervalByDay(event.openedAt, openEnd)) {
-        addInterval(openIntervals, interval.dateKey, event.domain, interval);
+      const openEnd = event.closedAt
+        || (liveVisitIds.has(event.id) ? now : (event.openSeconds ? event.openedAt + event.openSeconds * 1000 : null));
+      if (openEnd) {
+        for (const interval of splitIntervalByDay(event.openedAt, openEnd)) {
+          addInterval(openIntervals, interval.dateKey, event.domain, interval);
+        }
       }
 
       const activeSource = Array.isArray(event.activeIntervals) && event.activeIntervals.length
@@ -285,8 +297,14 @@ function rebuildDailyStatsFromVisits(visitEvents) {
 }
 
 async function rebuildAndStoreDailyStats() {
+  const state = await StorageUtils.getState();
   const visitEvents = await StorageUtils.getVisitEvents();
-  const dailyStats = rebuildDailyStatsFromVisits(visitEvents);
+  const liveVisitIds = liveVisitIdsFromState(state);
+  const repaired = repairOrphanOpenVisitEvents(visitEvents, liveVisitIds);
+  if (repaired) {
+    await StorageUtils.setVisitEvents(visitEvents);
+  }
+  const dailyStats = rebuildDailyStatsFromVisits(visitEvents, liveVisitIds);
   await StorageUtils.setDailyStats(dailyStats);
   return dailyStats;
 }
@@ -407,10 +425,138 @@ function addActiveIntervalToStore(visitEvents, session, endTs) {
   });
 }
 
+function liveVisitIdsFromState(state) {
+  const ids = new Set();
+  for (const session of Object.values(state?.openSessions || {})) {
+    if (session?.visitId) {
+      ids.add(session.visitId);
+    }
+  }
+  if (state?.activeSession?.visitId) {
+    ids.add(state.activeSession.visitId);
+  }
+  return ids;
+}
+
+function bestEffortVisitCloseTs(event, fallbackTs = null) {
+  const openedAt = Math.max(0, Math.floor(event?.openedAt || 0));
+  const fallback = Math.max(0, Math.floor(fallbackTs || 0));
+  const savedOpenEnd = event?.openSeconds
+    ? openedAt + Math.max(0, Math.floor(event.openSeconds)) * 1000
+    : 0;
+  return Math.max(openedAt, fallback, savedOpenEnd || openedAt);
+}
+
+function repairOrphanOpenVisitEvents(visitEvents, liveVisitIds, fallbackTsByVisitId = {}) {
+  let changed = false;
+
+  for (const dayEvents of Object.values(visitEvents || {})) {
+    for (const event of dayEvents || []) {
+      if (!event?.id || event.closedAt || liveVisitIds.has(event.id)) {
+        continue;
+      }
+
+      const closeTs = bestEffortVisitCloseTs(event, fallbackTsByVisitId[event.id]);
+      event.closedAt = closeTs;
+      event.openSeconds = Math.max(event.openSeconds || 0, Math.floor((closeTs - event.openedAt) / 1000));
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+async function touchHeartbeat(at = Date.now()) {
+  await StorageUtils.set({ lastHeartbeatTs: at });
+}
+
+async function createFreshOpenSessionsFromTabs(state, visitEvents, startTs) {
+  const openSessions = {};
+  const tabs = await chrome.tabs.query({});
+
+  for (const tab of tabs) {
+    const identity = UrlUtils.getPageIdentity(tab.url);
+    if (!identity || !Number.isInteger(tab.id) || isIgnoredPageSession(tab, state) || await isIgnoredIdentity(identity)) {
+      continue;
+    }
+
+    const session = createOpenSession(tab, identity, startTs);
+    openSessions[String(tab.id)] = session;
+    addVisitEventToStore(visitEvents, session);
+  }
+
+  return openSessions;
+}
+
+async function reconcileSuspendedHeartbeat() {
+  const now = Date.now();
+  const state = await StorageUtils.getState();
+  const previousHeartbeat = Math.max(0, Math.floor(state.lastHeartbeatTs || 0));
+  const openEntries = Object.values(state.openSessions || {});
+  const hasSessions = Boolean(state.activeSession) || openEntries.length > 0;
+
+  if (!previousHeartbeat && !hasSessions) {
+    await touchHeartbeat(now);
+    return;
+  }
+
+  const fallbackCutoff = Math.max(
+    0,
+    Math.floor(state.activeSession?.lastSavedTs || state.activeSession?.startTs || 0),
+    ...openEntries.map((session) => Math.floor(session?.lastSavedTs || session?.startTs || 0))
+  );
+  const suspendDetected = previousHeartbeat
+    ? now - previousHeartbeat > SUSPEND_GAP_MS
+    : hasSessions;
+
+  if (!suspendDetected) {
+    return;
+  }
+
+  const cutoff = Math.max(0, Math.min(previousHeartbeat || fallbackCutoff || now, now));
+  const dailyStats = await StorageUtils.getDailyStats();
+  const visitEvents = await StorageUtils.getVisitEvents();
+  const fallbackTsByVisitId = {};
+
+  if (state.activeSession?.domain && state.activeSession.startTs && cutoff > state.activeSession.startTs) {
+    addDuration(dailyStats, state.activeSession.domain, state.activeSession.startTs, cutoff, METRICS.ACTIVE);
+    addActiveIntervalToStore(visitEvents, state.activeSession, cutoff);
+    fallbackTsByVisitId[state.activeSession.visitId] = cutoff;
+  }
+
+  for (const session of openEntries) {
+    if (!session?.domain || !session.startTs) {
+      continue;
+    }
+
+    const endTs = Math.max(session.startTs, cutoff);
+    if (endTs > session.startTs) {
+      addDuration(dailyStats, session.domain, session.startTs, endTs, METRICS.OPEN);
+    }
+    finishVisitEventInStore(visitEvents, session, endTs);
+    fallbackTsByVisitId[session.visitId] = endTs;
+  }
+
+  repairOrphanOpenVisitEvents(visitEvents, new Set(), fallbackTsByVisitId);
+  enforceOpenCoversActive(dailyStats);
+
+  const nextOpenSessions = state.trackingPaused
+    ? {}
+    : await createFreshOpenSessionsFromTabs(state, visitEvents, now);
+
+  await StorageUtils.set({
+    activeSession: null,
+    dailyStats,
+    lastHeartbeatTs: now,
+    openSessions: nextOpenSessions,
+    visitEvents
+  });
+}
+
 async function hydrateOpenSessions() {
   const state = await StorageUtils.getState();
   if (state.trackingPaused) {
-    await StorageUtils.set({ openSessions: {} });
+    await StorageUtils.set({ lastHeartbeatTs: Date.now(), openSessions: {} });
     return;
   }
 
@@ -425,12 +571,18 @@ async function hydrateOpenSessions() {
       continue;
     }
 
+    const existingSession = state.openSessions?.[String(tab.id)];
+    if (existingSession?.domain && existingSession.url === identity.url) {
+      openSessions[String(tab.id)] = existingSession;
+      continue;
+    }
+
     const session = createOpenSession(tab, identity, now);
     openSessions[String(tab.id)] = session;
     addVisitEventToStore(visitEvents, session);
   }
 
-  await StorageUtils.set({ openSessions, visitEvents });
+  await StorageUtils.set({ lastHeartbeatTs: now, openSessions, visitEvents });
 }
 
 async function syncOpenSessionsWithTabs() {

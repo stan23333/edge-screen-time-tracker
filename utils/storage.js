@@ -4,6 +4,7 @@
     focusedWindowId: null,
     idleState: "active",
     ignoredPageSessions: {},
+    lastHeartbeatTs: 0,
     openSessions: {},
     trackingPaused: false
   };
