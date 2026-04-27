@@ -128,6 +128,38 @@ input {
   margin-bottom: 14px;
 }
 
+.runStatus {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 12px;
+  background: #ffffff;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.runStatus.running,
+.runStatus.calling_model {
+  border-color: #bfdbfe;
+  background: var(--blue-soft);
+  color: #1d4ed8;
+}
+
+.runStatus.done {
+  border-color: #bbf7d0;
+  background: var(--green-soft);
+  color: #047857;
+}
+
+.runStatus.error {
+  border-color: #fed7aa;
+  background: var(--peach-soft);
+  color: #b45309;
+}
+
 .metrics,
 .insightGrid,
 .layout {
@@ -136,7 +168,7 @@ input {
 }
 
 .metrics {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   margin-bottom: 14px;
 }
 
@@ -174,8 +206,12 @@ input {
 }
 
 .insightGrid {
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   margin-bottom: 14px;
+}
+
+.topInsightGrid {
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
 }
 
 .sectionTop,
@@ -186,13 +222,6 @@ input {
   margin-bottom: 14px;
 }
 
-.pillGrid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.pillGrid span,
 .usagePill {
   display: inline-flex;
   align-items: center;
@@ -211,6 +240,14 @@ input {
   gap: 8px;
 }
 
+.topicsSection {
+  margin-bottom: 14px;
+}
+
+.topicsSection .topicList {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
 .topicList div {
   display: flex;
   justify-content: space-between;
@@ -219,6 +256,7 @@ input {
   border-radius: 10px;
   padding: 10px 12px;
   background: #fbfcff;
+  min-width: 0;
 }
 
 .topicList span {
@@ -234,30 +272,129 @@ input {
   color: var(--muted);
 }
 
+.miniBars {
+  display: grid;
+  gap: 10px;
+}
+
+.miniBars div {
+  display: grid;
+  grid-template-columns: minmax(88px, 0.38fr) minmax(100px, 1fr) 42px;
+  gap: 10px;
+  align-items: center;
+}
+
+.miniBars span,
+.trendBars span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.miniBars i {
+  height: 9px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e5eaf2;
+}
+
+.miniBars b {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--blue);
+}
+
+.miniBars strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.trendBars {
+  display: grid;
+  grid-template-columns: repeat(14, minmax(18px, 1fr));
+  align-items: end;
+  min-height: 138px;
+  gap: 7px;
+}
+
+.trendBars div {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  align-items: end;
+  height: 138px;
+  gap: 7px;
+}
+
+.trendBars i {
+  display: block;
+  min-height: 8px;
+  border-radius: 6px 6px 3px 3px;
+  background: var(--blue);
+}
+
+.trendBars span {
+  text-align: center;
+}
+
 .layout {
-  grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
   align-items: start;
+  margin-bottom: 14px;
 }
 
 .reportList {
   display: grid;
   gap: 8px;
+  max-height: 640px;
   margin-top: 12px;
+  overflow: auto;
+  padding-right: 4px;
 }
 
 .reportItem {
   width: 100%;
+  max-width: 100%;
   min-height: 0;
   border: 1px solid var(--line);
   padding: 11px;
   background: #fbfcff;
   color: var(--ink);
   text-align: left;
+  overflow: hidden;
 }
 
 .reportItem strong,
 .reportItem span {
   display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reportItem small {
+  display: block;
+  margin-top: 7px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+}
+
+.reportItem.active {
+  border-color: var(--blue);
+  background: var(--blue-soft);
 }
 
 .reportItem span,
@@ -270,19 +407,100 @@ input {
 
 .reportPanel {
   min-height: 520px;
+  min-width: 0;
 }
 
-pre {
+.markdownBody {
   overflow: auto;
   min-height: 420px;
   margin: 0;
   border: 1px solid var(--line);
   border-radius: 12px;
-  padding: 16px;
+  padding: 20px;
   background: #fbfcff;
   color: var(--ink);
-  font: 14px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  white-space: pre-wrap;
+  font: 15px/1.65 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  overflow-wrap: anywhere;
+}
+
+.markdownBody h2,
+.markdownBody h3,
+.markdownBody h4 {
+  margin: 18px 0 8px;
+  line-height: 1.25;
+}
+
+.markdownBody h2:first-child,
+.markdownBody h3:first-child,
+.markdownBody h4:first-child,
+.markdownBody p:first-child {
+  margin-top: 0;
+}
+
+.markdownBody p {
+  margin: 10px 0;
+}
+
+.markdownBody ul,
+.markdownBody ol {
+  margin: 10px 0 14px;
+  padding-left: 22px;
+}
+
+.markdownBody li {
+  margin: 6px 0;
+}
+
+.markdownBody code {
+  border: 1px solid #dbe3ef;
+  border-radius: 6px;
+  padding: 1px 5px;
+  background: #ffffff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.92em;
+}
+
+.mdCodeBlock {
+  overflow: auto;
+  border: 1px solid #dbe3ef;
+  border-radius: 10px;
+  padding: 12px;
+  background: #ffffff;
+  font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre;
+}
+
+.mdTableWrap {
+  overflow: auto;
+  margin: 14px 0;
+  border: 1px solid #dbe3ef;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.mdTable {
+  width: 100%;
+  min-width: 520px;
+  border-collapse: collapse;
+}
+
+.mdTable th,
+.mdTable td {
+  border-bottom: 1px solid #e5eaf2;
+  padding: 10px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.mdTable th {
+  background: #f8fafc;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.mdTable tr:last-child td {
+  border-bottom: 0;
 }
 
 @media (max-width: 860px) {
@@ -296,7 +514,8 @@ pre {
   }
 
   .metrics,
-  .insightGrid {
+  .insightGrid,
+  .topInsightGrid {
     grid-template-columns: 1fr 1fr;
   }
 
@@ -307,7 +526,9 @@ pre {
 
 @media (max-width: 620px) {
   .metrics,
-  .insightGrid {
+  .insightGrid,
+  .topInsightGrid,
+  .topicsSection .topicList {
     grid-template-columns: 1fr;
   }
 }

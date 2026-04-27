@@ -2,14 +2,11 @@
 
 [中文](../../README.zh-CN.md) | [English](../../README.md)
 
-The current screenshots are stored in `docs/screenshots/`. The logo is stored in `docs/assets/`.
+Screenshots used by the main README files are stored here. The project logo is stored in `docs/assets/`.
 
-## Logo
+## Available Assets
 
 - `docs/assets/logo.png`
-
-## Screenshots
-
 - `docs/screenshots/popup1.png`
 - `docs/screenshots/popup2.png`
 - `docs/screenshots/dashboard.jpeg`
@@ -18,10 +15,4 @@ The current screenshots are stored in `docs/screenshots/`. The logo is stored in
 
 ## README Display Rule
 
-The main README files embed only:
-
-- logo
-- popup screenshots
-- dashboard screenshot
-
-Other screenshots are referenced by path only.
+The main README files embed the popup, dashboard, and records screenshots directly. Other screenshots can be referenced by path to keep the README readable.

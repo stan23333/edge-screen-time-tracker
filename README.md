@@ -2,196 +2,75 @@
 
 [中文文档](README.zh-CN.md) | English
 
-Web Screen Time Tracker is a Microsoft Edge / Chromium Manifest V3 extension for recording browser activity, page visits, page summaries, and AI-assisted behavior analysis.
+Web Screen Time Tracker is a Microsoft Edge / Chromium Manifest V3 extension for tracking browser attention, page visits, AI page summaries, and higher-level behavior reports.
 
-This project was designed and developed through an iterative collaboration between the user and Codex / GPT-5.5. Codex / GPT-5.5 is not a runtime dependency; it was the engineering assistant used to design, implement, review, and refine the extension.
-
-## Why This Exists
-
-A browser is close to a second operating system. Many people read, search, work, study, chat, compare, and make decisions inside browser tabs all day. A simple screen-time tracker can tell you how long the browser was open, but it cannot answer the more useful questions:
-
-- What did I actually look at today?
-- When did I read, search, work, drift, or revisit something?
-- Which websites received my focused attention?
-- Which content themes repeat across days, weeks, and months?
-- What patterns can a stronger model discover after enough data accumulates?
-
-This extension started as a browser usage tracker, but the long-term goal is a personal browser memory and behavior analysis system. Time is only one dimension. The more important data is the browsing timeline, page content summaries, repeated topics, and long-term behavioral patterns.
+It is built for people who use the browser as a daily workspace: reading, searching, coding, studying, comparing, and making decisions across many tabs. Instead of only counting how long the browser was open, the extension keeps a local browsing timeline and turns selected page activity into summaries and behavior reports.
 
 ## Screenshots
 
-Only the popup, dashboard and Records are embedded here to keep the README readable. More screenshots are available in `docs/screenshots/`.
+More screenshots are available in [`docs/screenshots/`](docs/screenshots/).
 
 ### Popup
+
 <p align="center">
-  <img src="docs/screenshots/popup2.png" alt="Popup 详情截图" width="320" />
+  <img src="docs/screenshots/popup2.png" alt="Popup screenshot" width="320" />
 </p>
 
 ### Dashboard
 
 <p align="center">
-  <img src="docs/screenshots/dashboard.jpeg" alt="Dashboard 截图" width="520" />
+  <img src="docs/screenshots/dashboard.jpeg" alt="Dashboard screenshot" width="560" />
 </p>
-
 
 ### Records
 
 <p align="center">
-  <img src="docs/screenshots/records.jpeg" alt="Records 截图" width="520" />
+  <img src="docs/screenshots/records.jpeg" alt="Records screenshot" width="560" />
 </p>
 
+## Core Features
 
-Additional screenshots:
-- Settings: `docs/screenshots/settings.jpeg`
+- Active-first browser usage tracking by domain and page.
+- Open-context tracking for pages that remain open in the browser.
+- Visit timeline with URLs, titles, open/close timestamps, active intervals, and summary status.
+- Popup for quick daily awareness.
+- Dashboard for active share, open/active comparison, heatmaps, and per-site details.
+- Records page for browsing history, summary JSON, model status, and token usage.
+- Settings page for provider presets, prompts, API tests, ignored domains, WebDAV, and export.
+- Analysis page for day/week/month behavior reports with Markdown preview, evidence charts, trends, and frequent themes.
+- Automatic page summaries through OpenAI-compatible chat completion APIs.
+- Screenshot fallback for pages where DOM text capture is blocked.
+- Weekly WebDAV archive backup.
+- Full local JSON export.
 
-## Core Ideas
+## Active Usage vs Open Context
 
-### Active Usage
-
-Active usage is the main attention metric. It counts time when:
+**Active usage** is the primary attention metric. Time is counted only when:
 
 - the tab is selected
 - the browser window is focused
 - the device is not locked
 - the page is a normal `http` or `https` URL
-- the website is not ignored
+- the domain is not ignored
 
-Active time is used for totals, rankings, shares, and the main popup/dashboard interpretation.
+**Open context** means a page was open in the browser, but not necessarily receiving attention. It is useful for understanding a single page or website, but it is not used as a primary total because many tabs can be open at the same time.
 
-### Open Context
+The extension avoids counting sleep, shutdown, and long browser suspension gaps as open or active time.
 
-Open context means a page or website was open, but not necessarily receiving attention. It is useful only as context for a single page or website.
+## Page Summary Flow
 
-For example, if a site was open for 2 hours but active for 8 minutes, that tells us the page was mostly background context. But summing open time across the whole browser is usually misleading, because many tabs can be open at the same time. For that reason, the UI treats open time as a secondary comparison metric, not as a primary usage total.
+Automatic summarization is non-blocking and separate from time tracking:
 
-### Visit Events
+1. A normal page finishes loading.
+2. The extension creates a pending summary record.
+3. The background queue waits briefly for dynamic content to render.
+4. DOM text capture is attempted first.
+5. If text capture succeeds, the summary model receives page metadata and extracted text.
+6. If text capture is blocked and screenshot fallback is enabled, the visible page can be captured and sent to a vision-capable summary model.
+7. The result is stored as raw model output plus normalized structured JSON.
+8. Token usage is stored when the provider returns `usage`.
 
-`visitEvents` are the raw browsing timeline. They preserve:
-
-- domain
-- URL
-- title
-- open/close timestamps
-- active intervals
-- summary status
-- summary ID
-
-Aggregated charts can change over time, but the visit timeline is the source of truth.
-
-### Page Summaries
-
-`pageSummaries` store model-generated summaries for visited pages. These records are designed for later export and deeper analysis with stronger models.
-
-### Analysis Reports
-
-`analysisReports` store higher-level day, week, and month behavior summaries. These reports use collected browsing stats, visit events, and page summaries as input.
-
-## Implemented Features
-
-- Manifest V3 extension for Microsoft Edge and Chromium browsers
-- Popup with active-first daily overview
-- Current-page active share of today's active browsing time
-- Dashboard with active-first ranking and active share charts
-- Open/active comparison bars for individual websites
-- Records page for browsing history, Summary JSON, LLM usage, and token usage
-- Settings page for summary model, analysis model, prompts, ignored domains, and WebDAV
-- Analysis page for day/week/month behavior reports
-- Automatic page summary queue
-- OpenAI-compatible API support
-- Provider presets for OpenAI, OpenRouter, SiliconFlow, Ollama, and custom endpoints
-- SiliconFlow compatibility handling, including JSON mode fallback for DeepSeek R1/V3 style models
-- Real connectivity tests for summary API, analysis API, and WebDAV
-- Token usage capture when the provider returns `usage`
-- Full JSON export
-- Weekly WebDAV archive backup
-- Right-click website ignore action
-- In-app ignored domain management
-- Local storage with `chrome.storage.local`
-- Lock-state detection
-- System-timezone date grouping
-
-## Interface Overview
-
-### Popup
-
-The popup is meant for fast awareness:
-
-- today's total active usage
-- current page active time
-- current page share of today's active time
-- current page open/active comparison
-- top active sites
-- quick ignore action
-- link to the full dashboard
-
-### Dashboard
-
-The dashboard is the primary usage visualization page:
-
-- active-focused daily total
-- top active site share
-- active-ranked website list
-- open/active bar comparison per website
-- active and open heatmaps
-- selected website detail panel
-
-Open time remains visible here because it is useful for a single website comparison.
-
-### Records
-
-Records is the data inspection page:
-
-- website statistics over selected date ranges
-- visit list with timestamps
-- Summary JSON viewer
-- LLM request status
-- summary/analysis token usage
-- pending/capturing/summarizing/done/error/skipped status counts
-
-By default, the Summary JSON panel shows the latest successful summary. If a user clicks a visit, the panel stays on that clicked item, even if it is failed, skipped, pending, or still summarizing.
-
-### Settings
-
-Settings contains:
-
-- summary model configuration
-- analysis model configuration
-- editable prompts
-- provider presets
-- real API tests
-- WebDAV configuration and test
-- ignored domains
-- JSON export
-- manual current-page summarization
-- weekly backup action
-
-### Analysis
-
-Analysis generates higher-level behavior summaries for:
-
-- day
-- week
-- month
-
-The analysis model can be configured separately from the page summary model, so a cheaper/faster model can summarize pages while a stronger model analyzes behavior.
-
-## LLM Summary Flow
-
-Automatic summarization follows a non-blocking queue:
-
-1. A normal web page completes loading.
-2. The extension creates a `pending` summary record.
-3. A background summary queue waits briefly so dynamic content can render.
-4. The extension captures title, meta description, headings, and body text.
-5. The summary model is called with a fixed JSON schema prompt.
-6. The response is stored as both raw text and normalized structured JSON.
-7. Token usage is stored if the provider returns it.
-
-The summary queue is separate from the tracking queue. Slow model responses should not block active/open time tracking.
-
-## Default Summary JSON Schema
-
-The summary prompt asks the model to return valid JSON matching this schema:
+Default structured summary shape:
 
 ```json
 {
@@ -204,120 +83,71 @@ The summary prompt asks the model to return valid JSON matching this schema:
 }
 ```
 
-Field intent:
+## Blocked Pages and Screenshot Fallback
 
-- `summary`: a concise natural-language summary of the page
-- `topics`: short topic labels for future aggregation
-- `contentType`: broad page/content category
-- `intent`: inferred reason the user may have visited the page
-- `keyPoints`: important extracted points
-- `confidence`: model confidence from `0.0` to `1.0`
+Some sites, including AI chat apps and highly protected pages, may block `chrome.scripting.executeScript` from reading DOM text. This is a browser/content-security limitation, not necessarily an API key or model problem.
 
-The normalized object is stored as `structuredSummary`.
+When screenshot fallback is enabled:
 
-## Summary Statuses
+- DOM text capture is still tried first.
+- Screenshot capture is used only for blocked or low-content pages.
+- The screenshot is sent to the configured vision-capable summary model.
+- The screenshot is not intentionally kept as a long-term local file after a successful request.
+- The page generally needs to be visible for capture to succeed.
+- Domains can be restricted in Settings.
 
-`pageSummaries` and `visitEvents` use summary states so the UI can show what happened:
+For this mode, the configured summary model must support image input. Examples include multimodal models exposed through OpenAI-compatible providers, such as GPT-4o/4.1, Gemini, Claude 3.5/3.7, Qwen VL models, LLaVA, Pixtral, InternVL, or MiniCPM-V, depending on provider availability.
 
-- `pending`: summary task was created
-- `capturing`: page content is being captured
-- `summarizing`: model request is running
-- `done`: summary succeeded
-- `error`: model/API/unrecoverable failure
-- `skipped`: page closed, URL changed, domain ignored, unsupported URL, or content capture blocked
+## Analysis Reports
 
-`skipped` is different from `error`. A skipped page is usually not an API failure; it means the extension decided not to summarize or could not safely capture content.
+The Analysis page generates day, week, and month reports from:
 
-## Storage Shape
+- daily usage stats
+- visit events
+- page summaries
+- summary evidence levels and capture methods
+- model token usage where available
 
-The extension stores data in `chrome.storage.local`.
+Reports are rendered as Markdown and support headings, lists, code blocks, inline code, bold text, and tables. Evidence and trend charts are shown above the report list, and frequent themes are shown as a full-width visual section.
 
-Simplified shape:
+The analysis model can be configured separately from the summary model, so a cheaper model can summarize pages while a stronger model analyzes longer-term behavior.
 
-```json
-{
-  "dailyStats": {
-    "2026-04-26": {
-      "example.com": {
-        "activeSeconds": 1800,
-        "openSeconds": 5400
-      }
-    }
-  },
-  "visitEvents": {
-    "2026-04-26": [
-      {
-        "id": "uuid",
-        "domain": "example.com",
-        "url": "https://example.com/article",
-        "title": "Example Article",
-        "openedAt": 1777200000000,
-        "closedAt": 1777201800000,
-        "openSeconds": 1800,
-        "activeSeconds": 600,
-        "activeIntervals": [
-          {
-            "start": 1777200300000,
-            "end": 1777200900000,
-            "seconds": 600
-          }
-        ],
-        "summaryId": "uuid",
-        "summaryStatus": "done"
-      }
-    ]
-  },
-  "pageSummaries": {
-    "2026-04-26": [
-      {
-        "id": "uuid",
-        "createdAt": 1777201000000,
-        "domain": "example.com",
-        "url": "https://example.com/article",
-        "title": "Example Article",
-        "status": "done",
-        "model": "model-name",
-        "prompt": "summary prompt",
-        "summary": "{\"summary\":\"...\"}",
-        "structuredSummary": {
-          "summary": "...",
-          "topics": ["..."],
-          "contentType": "article",
-          "intent": "...",
-          "keyPoints": ["..."],
-          "confidence": 0.8
-        },
-        "usage": {
-          "prompt_tokens": 1000,
-          "completion_tokens": 200,
-          "total_tokens": 1200
-        },
-        "error": ""
-      }
-    ]
-  },
-  "analysisReports": {
-    "day": [
-      {
-        "id": "uuid",
-        "createdAt": 1777202000000,
-        "period": "day",
-        "startDate": "2026-04-26",
-        "endDate": "2026-04-26",
-        "model": "analysis-model-name",
-        "report": "...",
-        "usage": {
-          "total_tokens": 3000
-        }
-      }
-    ]
-  }
-}
-```
+## Install in Edge or Chromium
+
+Development install:
+
+1. Open `edge://extensions` or `chrome://extensions`.
+2. Enable **Developer mode**.
+3. Choose **Load unpacked**.
+4. Select this project folder.
+
+CRX packaging is possible through the browser extension page's **Pack extension** action. Keep the generated `.pem` private key safe if you want future builds to keep the same extension ID. Do not commit `.crx`, `.pem`, API keys, WebDAV credentials, or exported personal data to GitHub.
+
+For normal user distribution, Edge Add-ons, Chrome Web Store, or enterprise policy distribution is more reliable than manually sharing a CRX file.
+
+## Model Configuration
+
+The extension supports OpenAI-compatible chat completion APIs.
+
+Built-in provider presets:
+
+- OpenAI: `https://api.openai.com/v1`
+- OpenRouter: `https://openrouter.ai/api/v1`
+- SiliconFlow China mainland endpoint: `https://api.siliconflow.cn/v1`
+- SiliconFlow global endpoint: `https://api.siliconflow.com/v1`
+- Ollama: `http://localhost:11434/v1`
+- Custom endpoint
+
+Notes:
+
+- Summary and analysis models can be configured independently.
+- SiliconFlow DeepSeek R1/V3 style models may not support strict JSON mode, so the extension falls back when needed.
+- API tests send real requests to verify model connectivity.
+- Analysis requests may take longer than summary tests because they include more accumulated data.
 
 ## WebDAV Backup
 
-WebDAV backup is designed around weekly archives instead of uploading after every small change.
+WebDAV backup stores weekly archives instead of uploading after every small change.
 
 Default archive path:
 
@@ -325,91 +155,47 @@ Default archive path:
 browser-tracker/weeks/YYYY-Www.json
 ```
 
-Example:
+Weekly archives include daily stats, visit events, page summaries, analysis reports, timezone, schema version, export timestamp, and sanitized settings.
 
-```text
-browser-tracker/weeks/2026-W17.json
-```
+The WebDAV test performs a real `PUT`, `GET`, and `DELETE` cycle with a nonce payload.
 
-Weekly archive contents include:
+## Permissions
 
-- daily stats
-- visit events
-- page summaries
-- analysis reports
-- timezone
-- schema version
-- export timestamp
-- sanitized settings
+The extension requests broad permissions because it tracks tab state and can summarize pages across domains:
 
-After a day/week/month analysis succeeds, the extension uploads the affected weekly archive files if WebDAV is configured.
+- `tabs`: read tab URL/title and track active tab changes.
+- `storage`: store local stats, visits, summaries, settings, and reports.
+- `idle`: avoid counting locked or idle device time as active browsing.
+- `alarms`: run periodic checkpoints and background queues.
+- `scripting`: extract page metadata and DOM text when allowed.
+- `activeTab`: access the currently active page after user interaction.
+- `contextMenus`: provide right-click ignore actions.
+- `notifications`: notify about one-time screenshot fallback behavior or important status.
+- `debugger`: capture blocked visible pages when standard screenshot APIs are blocked.
+- `<all_urls>`: support tracking and optional summarization across user-visited websites.
 
-The WebDAV test uses real `PUT`, `GET`, and `DELETE` requests with a nonce payload. A green status means the server accepted a real write/read/delete cycle.
+The `debugger` permission is used for screenshot fallback on blocked pages. It is not used to remotely debug user activity.
 
-## Install in Edge
+## Privacy
 
-1. Open `edge://extensions`.
-2. Enable Developer mode.
-3. Choose **Load unpacked**.
-4. Select this folder: `edge-screen-time-tracker`.
+By default, data is stored locally in `chrome.storage.local`.
 
-## Model Configuration
+External data transfer happens only when the user configures related features:
 
-The extension supports OpenAI-compatible chat completion APIs.
+- Page text or screenshot evidence is sent to the configured summary model when summarization runs.
+- Aggregated stats, visits, and summaries are sent to the configured analysis model when analysis runs.
+- Weekly archives are uploaded only to the user-configured WebDAV endpoint.
+- JSON exports can contain private browsing history and page summaries.
 
-Built-in presets:
+API keys and WebDAV credentials are stored in local extension storage. Treat exported data as private.
 
-- OpenAI: `https://api.openai.com/v1`
-- OpenRouter: `https://openrouter.ai/api/v1`
-- SiliconFlow: `https://api.siliconflow.com/v1`
-- Ollama: `http://localhost:11434/v1`
-- Custom endpoint
+## Current Limitations
 
-SiliconFlow note:
-
-- Some DeepSeek R1/V3 style models do not support strict JSON mode.
-- The extension automatically avoids or retries without `response_format` when needed.
-- Failed model requests show the provider response body where possible.
-
-## Cost Notes
-
-LLM cost depends on:
-
-- model pricing
-- prompt length
-- captured page text length
-- number of automatically summarized pages
-- whether the provider reports token usage
-
-Observed sample:
-
-- 18 websites summarized with GLM-5-Air cost about `¥0.1253`.
-
-This is not classified as definitely expensive or cheap yet. It is a real observation and should be tracked. If this pattern scales poorly, cost reduction becomes a product bug/risk.
-
-## Current Issues / TODO
-
-- [ ] LLM cost optimization: 18 websites with GLM-5-Air cost `¥0.1253`; monitor whether this is acceptable at daily/weekly scale.
-- [ ] Prompt optimization: current prompts work, but may be longer than necessary and may increase cost.
-- [ ] Summary cost strategy: consider same-URL caching, content-change detection, trigger frequency control, and cheaper preprocessing models.
-- [ ] WebDAV long-term real-world testing: the test flow and weekly archive exist, but need validation across real WebDAV providers over time.
-- [ ] Blocked content capture: sites such as ChatGPT may block `chrome.scripting.executeScript`, causing content capture to fail.
-- [ ] More detailed token/cost visualization: break down cost by model, website, date, and summary/analysis type.
-- [ ] Data migration strategy: future schema changes should include migration tooling and schema version handling.
-- [ ] Prompt quality iteration: improve summary precision, reduce noise, and make long-term behavior analysis more useful.
-
-## Known Limitation: Blocked Pages
-
-Some pages may block extension content capture. When this happens, `chrome.scripting.executeScript` can fail with errors such as `Blocked`.
-
-This is not an API key problem and not necessarily a model problem. It means the extension could not read the page content from the browser context.
-
-Expected handling:
-
-- the visit should still be recorded
-- the summary may become `skipped` or `error`
-- the UI should show the reason
-- no empty content should be sent to the model
+- Screenshot fallback requires a visible page and a vision-capable model.
+- Some browser-internal pages and extension pages cannot be summarized.
+- Provider behavior differs; not every OpenAI-compatible endpoint supports JSON mode, image input, or token usage reporting.
+- Cost depends on model pricing, captured content length, screenshot usage, and summary frequency.
+- Schema migration tooling is still a future improvement.
 
 ## Project Structure
 
@@ -430,27 +216,3 @@ edge-screen-time-tracker/
 ├── README.md
 └── README.zh-CN.md
 ```
-
-## Privacy
-
-Data is stored locally in `chrome.storage.local` unless the user configures WebDAV backup or model APIs.
-
-Important:
-
-- API keys are stored in local extension storage.
-- Page content is sent to the configured summary model only when summarization runs.
-- Analysis data is sent to the configured analysis model only when analysis runs.
-- WebDAV backup uploads archives only to the user-configured WebDAV endpoint.
-- Exported JSON can contain private browsing history and summaries.
-
-Do not commit real API keys, WebDAV credentials, or exported personal data.
-
-## Roadmap
-
-- Better prompt templates and lower-cost summary modes
-- Better blocked-page classification
-- Provider-specific model capability profiles
-- More detailed cost dashboards
-- Schema migration tooling
-- Stronger weekly/monthly behavior pattern analysis
-- Better visual design consistency across all extension pages

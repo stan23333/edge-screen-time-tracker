@@ -3,6 +3,10 @@ importScripts("utils/time.js", "utils/url.js", "utils/storage.js");
 const IDLE_THRESHOLD_SECONDS = 300;
 const CHECKPOINT_ALARM = "checkpoint-active-session";
 const SUSPEND_GAP_MS = 10 * 60 * 1000;
+const SCREENSHOT_FALLBACK_INTERVAL_MS = 10 * 60 * 1000;
+const MODEL_REQUEST_TIMEOUT_MS = 15 * 1000;
+const ANALYSIS_MODEL_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
+const MIN_SUMMARY_TEXT_CHARS = 200;
 const IGNORE_DOMAIN_MENU = "ignore-current-website";
 const METRICS = {
   ACTIVE: "activeSeconds",
@@ -17,6 +21,25 @@ const SUMMARY_STATUS = {
   ERROR: "error",
   SKIPPED: "skipped"
 };
+const CAPTURE_METHOD = {
+  DOM_TEXT: "dom_text",
+  METADATA_ONLY: "metadata_only",
+  SCREENSHOT_VISION: "screenshot_vision"
+};
+const CAPTURE_STATUS = {
+  OK: "ok",
+  LOW_CONTENT: "low_content",
+  BLOCKED: "blocked",
+  WAITING_VISIBLE_TAB: "waiting_visible_tab",
+  SCREENSHOT_ATTEMPTING: "screenshot_attempting",
+  UNSUPPORTED: "unsupported",
+  ERROR: "error"
+};
+const EVIDENCE_LEVEL = {
+  HIGH: "high",
+  MEDIUM: "medium",
+  LOW: "low"
+};
 let operationQueue = Promise.resolve();
 let summaryQueue = Promise.resolve();
 const pendingSummaryVisitIds = new Set();
@@ -25,6 +48,20 @@ let lastSummaryStatus = {
   status: "none",
   reason: "No summary task has run yet."
 };
+let lastAnalysisStatus = {
+  at: 0,
+  status: "none",
+  reason: "No analysis task has run yet."
+};
+
+function setLastAnalysisStatus(status, reason, details = {}) {
+  lastAnalysisStatus = {
+    at: Date.now(),
+    status,
+    reason,
+    ...details
+  };
+}
 
 function normalizeIgnoredDomains(domains) {
   return [...new Set((domains || [])
@@ -923,10 +960,13 @@ async function exportFullData() {
   };
 }
 
-async function callChatModel(config, prompt, content, { json = false } = {}) {
-  const endpoint = config.endpoint || buildChatCompletionsEndpoint(config.baseUrl);
-  if (!endpoint || !config?.model) {
+async function callChatModel(config, prompt, content, { json = false, maxTokens = null, fast = false, timeoutMs = MODEL_REQUEST_TIMEOUT_MS } = {}) {
+  const endpoints = chatCompletionEndpoints(config);
+  if (!endpoints.length || !config?.model) {
     throw new Error("Model base URL and model are required.");
+  }
+  if (!config.apiKey && !isLocalModelConfig(config)) {
+    throw new Error("Model API key is required.");
   }
 
   const headers = {
@@ -946,46 +986,91 @@ async function callChatModel(config, prompt, content, { json = false } = {}) {
     temperature: 0.2
   };
 
+  if (Number.isFinite(Number(maxTokens)) && Number(maxTokens) > 0) {
+    body.max_tokens = Math.floor(Number(maxTokens));
+  }
+
+  if (isSiliconFlowConfig(config) && (fast || json)) {
+    body.enable_thinking = false;
+  }
+
   if (shouldUseJsonMode(config, json)) {
     body.response_format = { type: "json_object" };
   }
 
-  let response = await fetch(endpoint, {
+  let lastError = null;
+  for (const endpoint of endpoints) {
+    try {
+      const data = await requestChatCompletion(endpoint, headers, body, config, timeoutMs);
+      const text = data.choices?.[0]?.message?.content
+        || data.message?.content
+        || data.output_text
+        || data.output?.[0]?.content?.[0]?.text;
+
+      if (typeof text !== "string" || !text.trim()) {
+        throw new Error("Model response did not include assistant text.");
+      }
+
+      return {
+        text: text.trim(),
+        usage: normalizeTokenUsage(data.usage)
+      };
+    } catch (error) {
+      lastError = error;
+      if ([400, 401, 403].includes(error.status)) {
+        break;
+      }
+    }
+  }
+
+  throw lastError || new Error("Model request failed.");
+}
+
+async function requestChatCompletion(endpoint, headers, body, config, timeoutMs) {
+  let response = await fetchWithTimeout(endpoint, {
     method: "POST",
     headers,
     body: JSON.stringify(body)
-  });
+  }, timeoutMs);
 
-  if (!response.ok && body.response_format && isSiliconFlowConfig(config)) {
-    delete body.response_format;
-    response = await fetch(endpoint, {
+  if (!response.ok && body.response_format && isSiliconFlowConfig(config) && [400, 422].includes(response.status)) {
+    const fallbackBody = { ...body };
+    delete fallbackBody.response_format;
+    response = await fetchWithTimeout(endpoint, {
       method: "POST",
       headers,
-      body: JSON.stringify(body)
-    });
+      body: JSON.stringify(fallbackBody)
+    }, timeoutMs);
   }
 
   if (!response.ok) {
-    throw new Error(await modelErrorMessage(response));
+    const error = new Error(await modelErrorMessage(response, endpoint));
+    error.status = response.status;
+    throw error;
   }
 
-  const data = await response.json();
-  const text = data.choices?.[0]?.message?.content
-    || data.message?.content
-    || data.output_text
-    || data.output?.[0]?.content?.[0]?.text;
-
-  if (typeof text !== "string" || !text.trim()) {
-    throw new Error("Model response did not include assistant text.");
-  }
-
-  return {
-    text: text.trim(),
-    usage: normalizeTokenUsage(data.usage)
-  };
+  return response.json();
 }
 
-async function modelErrorMessage(response) {
+async function fetchWithTimeout(url, options, timeoutMs) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(`Model request timed out after ${Math.round(timeoutMs / 1000)}s: ${url}`);
+    }
+    throw new Error(`Model request failed before receiving a response: ${error.message || error}`);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function modelErrorMessage(response, endpoint = "") {
   let detail = "";
   try {
     const text = await response.text();
@@ -996,13 +1081,19 @@ async function modelErrorMessage(response) {
     detail = "";
   }
 
-  return `Model request failed: ${response.status} ${response.statusText}${detail ? ` - ${detail}` : ""}`;
+  return `Model request failed${endpoint ? ` at ${endpoint}` : ""}: ${response.status} ${response.statusText}${detail ? ` - ${detail}` : ""}`;
 }
 
 function isSiliconFlowConfig(config) {
   const provider = String(config?.provider || "").toLowerCase();
   const baseUrl = String(config?.baseUrl || config?.endpoint || "").toLowerCase();
   return provider === "siliconflow" || baseUrl.includes("siliconflow.");
+}
+
+function isLocalModelConfig(config) {
+  const provider = String(config?.provider || "").toLowerCase();
+  const baseUrl = String(config?.baseUrl || config?.endpoint || "").toLowerCase();
+  return provider === "ollama" || baseUrl.includes("localhost") || baseUrl.includes("127.0.0.1");
 }
 
 function siliconFlowSupportsJsonMode(config) {
@@ -1016,6 +1107,11 @@ function siliconFlowSupportsJsonMode(config) {
 
 function shouldUseJsonMode(config, json) {
   return Boolean(json && siliconFlowSupportsJsonMode(config));
+}
+
+function chatCompletionEndpoints(config) {
+  const primary = config.endpoint || buildChatCompletionsEndpoint(config.baseUrl);
+  return primary ? [primary] : [];
 }
 
 function normalizeTokenUsage(usage) {
@@ -1052,13 +1148,7 @@ function buildChatCompletionsEndpoint(baseUrl) {
 }
 
 function normalizeSummaryJson(rawText) {
-  let parsed = null;
-
-  try {
-    parsed = JSON.parse(rawText);
-  } catch {
-    parsed = { summary: rawText };
-  }
+  const parsed = parseJsonObjectFromText(rawText) || { summary: rawText };
 
   return {
     summary: String(parsed.summary || ""),
@@ -1070,19 +1160,212 @@ function normalizeSummaryJson(rawText) {
   };
 }
 
+function parseJsonObjectFromText(rawText) {
+  const text = String(rawText || "").trim();
+  if (!text) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Try common model output wrappers below.
+  }
+
+  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenceMatch) {
+    try {
+      return JSON.parse(fenceMatch[1].trim());
+    } catch {
+      // Try embedded object extraction below.
+    }
+  }
+
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    try {
+      return JSON.parse(text.slice(start, end + 1));
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function normalizeDomainList(domains) {
+  return [...new Set((domains || [])
+    .map((domain) => String(domain).trim().replace(/^https?:\/\//i, "").replace(/^www\./i, "").split("/")[0].toLowerCase())
+    .filter(Boolean))]
+    .sort();
+}
+
+function baseCaptureMeta(overrides = {}) {
+  return {
+    captureMethod: CAPTURE_METHOD.METADATA_ONLY,
+    captureStatus: CAPTURE_STATUS.UNSUPPORTED,
+    evidenceLevel: EVIDENCE_LEVEL.LOW,
+    sourceCharCount: 0,
+    screenshotCapturedAt: null,
+    screenshotWindowId: null,
+    screenshotAttemptedAt: null,
+    captureDiagnostics: null,
+    captureError: "",
+    ...overrides
+  };
+}
+
+function applyCaptureMeta(record, capture) {
+  const meta = baseCaptureMeta(capture);
+  record.captureMethod = meta.captureMethod;
+  record.captureStatus = meta.captureStatus;
+  record.evidenceLevel = meta.evidenceLevel;
+  record.sourceCharCount = meta.sourceCharCount;
+  record.screenshotCapturedAt = meta.screenshotCapturedAt;
+  record.screenshotWindowId = meta.screenshotWindowId;
+  record.screenshotAttemptedAt = meta.screenshotAttemptedAt;
+  record.captureDiagnostics = meta.captureDiagnostics;
+  record.captureError = meta.captureError;
+}
+
+function buildTextSummaryContent(identity, tab, captured) {
+  return [
+    `URL: ${identity.url}`,
+    `Title: ${captured.title || tab.title || identity.domain}`,
+    `Capture method: ${CAPTURE_METHOD.DOM_TEXT}`,
+    `Evidence level: ${EVIDENCE_LEVEL.HIGH}`,
+    "",
+    "Content:",
+    captured.text
+  ].join("\n");
+}
+
+function buildScreenshotSummaryContent(identity, tab, imageDataUrl) {
+  return [
+    {
+      type: "text",
+      text: [
+        `URL: ${identity.url}`,
+        `Title: ${tab.title || identity.domain}`,
+        `Capture method: ${CAPTURE_METHOD.SCREENSHOT_VISION}`,
+        `Evidence level: ${EVIDENCE_LEVEL.MEDIUM}`,
+        "",
+        "The DOM text extractor was blocked or produced too little content. Analyze only what is visible in this screenshot. Do not infer hidden content outside the screenshot. Return the configured summary JSON."
+      ].join("\n")
+    },
+    {
+      type: "image_url",
+      image_url: {
+        url: imageDataUrl,
+        detail: "low"
+      }
+    }
+  ];
+}
+
+function isScreenshotFallbackAllowed(settings, domain) {
+  if (settings.capture.screenshotFallbackEnabled === false) {
+    return false;
+  }
+
+  const allowlist = normalizeDomainList(settings.capture.screenshotAuthorizedDomains);
+  return !allowlist.length || allowlist.includes(domain);
+}
+
+async function hasAllUrlsPermission() {
+  if (!chrome.permissions?.contains) {
+    return true;
+  }
+
+  try {
+    return await chrome.permissions.contains({ origins: ["<all_urls>"] });
+  } catch {
+    return false;
+  }
+}
+
+async function notifyScreenshotFallbackNeeded(settings, domain) {
+  const prompted = settings.capture.screenshotPromptedDomains || {};
+  if (prompted[domain]) {
+    return settings;
+  }
+
+  const nextSettings = {
+    ...settings,
+    capture: {
+      ...settings.capture,
+      screenshotPromptedDomains: {
+        ...prompted,
+        [domain]: Date.now()
+      }
+    }
+  };
+  await StorageUtils.setSettings(nextSettings);
+
+  try {
+    if (chrome.notifications?.create) {
+      await chrome.notifications.create(`screenshot-fallback-${domain}`, {
+        type: "basic",
+        iconUrl: chrome.runtime.getURL("assets/icon128.png"),
+        title: "Screenshot fallback available",
+        message: `${domain} blocked text capture. When this tab is visible, the extension will send a screenshot to the configured vision model for summary.`
+      });
+    }
+  } catch {
+    // Notification is best-effort; the pending domain remains visible in Settings.
+  }
+
+  return nextSettings;
+}
+
 async function extractTabContent(tabId, maxContentChars) {
   const [result] = await chrome.scripting.executeScript({
     target: { tabId },
     func: (limit) => {
       const title = document.title || "";
       const url = location.href;
-      const description = document.querySelector("meta[name='description']")?.content || "";
-      const headings = Array.from(document.querySelectorAll("h1,h2"))
-        .slice(0, 16)
-        .map((node) => node.innerText.trim())
+      const blockedSelectors = [
+        "script",
+        "style",
+        "noscript",
+        "svg",
+        "canvas",
+        "iframe",
+        "nav",
+        "footer",
+        "header",
+        "[aria-hidden='true']",
+        "[hidden]"
+      ].join(",");
+      const visibleText = (node) => {
+        const value = (node.innerText || node.textContent || "").replace(/\s+/g, " ").trim();
+        if (!value) {
+          return "";
+        }
+        const style = getComputedStyle(node);
+        if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) {
+          return "";
+        }
+        return value;
+      };
+      const description = (document.querySelector("meta[name='description']")?.content || "").trim();
+      const headings = Array.from(document.querySelectorAll("h1,h2,h3"))
+        .map(visibleText)
         .filter(Boolean)
-        .join("\n");
-      const text = (document.body?.innerText || "").replace(/\s+\n/g, "\n").replace(/\n{3,}/g, "\n\n");
+        .slice(0, 24);
+      const contentRoot = document.querySelector("main, article, [role='main']") || document.body;
+      const blocks = Array.from(contentRoot?.querySelectorAll("article, section, p, li, blockquote, pre, code, td, th") || [])
+        .filter((node) => !node.closest(blockedSelectors))
+        .map(visibleText)
+        .filter((value, index, values) => value.length >= 2 && values.indexOf(value) === index)
+        .slice(0, 240);
+      const fallbackText = visibleText(contentRoot || document.body);
+      const text = [description, ...headings, ...blocks, blocks.length ? "" : fallbackText]
+        .filter(Boolean)
+        .join("\n")
+        .replace(/[ \t]+\n/g, "\n")
+        .replace(/\n{3,}/g, "\n\n");
       return {
         title,
         url,
@@ -1094,6 +1377,43 @@ async function extractTabContent(tabId, maxContentChars) {
   });
 
   return result?.result || null;
+}
+
+async function captureDomSummarySource(tabId, maxContentChars) {
+  try {
+    const captured = await extractTabContent(tabId, maxContentChars);
+    const text = String(captured?.text || "").trim();
+    if (!text) {
+      return {
+        captured: { ...(captured || {}), text: "" },
+        meta: baseCaptureMeta({
+          captureMethod: CAPTURE_METHOD.METADATA_ONLY,
+          captureStatus: CAPTURE_STATUS.LOW_CONTENT,
+          evidenceLevel: EVIDENCE_LEVEL.LOW
+        })
+      };
+    }
+
+    return {
+      captured: { ...captured, text },
+      meta: baseCaptureMeta({
+        captureMethod: CAPTURE_METHOD.DOM_TEXT,
+        captureStatus: text.length < MIN_SUMMARY_TEXT_CHARS ? CAPTURE_STATUS.LOW_CONTENT : CAPTURE_STATUS.OK,
+        evidenceLevel: text.length < MIN_SUMMARY_TEXT_CHARS ? EVIDENCE_LEVEL.LOW : EVIDENCE_LEVEL.HIGH,
+        sourceCharCount: text.length
+      })
+    };
+  } catch (error) {
+    return {
+      captured: null,
+      meta: baseCaptureMeta({
+        captureMethod: CAPTURE_METHOD.METADATA_ONLY,
+        captureStatus: CAPTURE_STATUS.BLOCKED,
+        evidenceLevel: EVIDENCE_LEVEL.LOW,
+        captureError: error.message || "Page content capture was blocked."
+      })
+    };
+  }
 }
 
 async function linkSummaryToVisit(tabId, summaryId, status) {
@@ -1142,6 +1462,234 @@ async function updateSummaryRecord(dateKey, summaryId, updater) {
   return records[index];
 }
 
+function inferLegacyCaptureMeta(record) {
+  if (record.captureMethod && record.captureStatus && record.evidenceLevel) {
+    return null;
+  }
+
+  const message = String(record.error || record.captureError || "").toLowerCase();
+  if (message.includes("blocked")) {
+    return baseCaptureMeta({
+      captureMethod: CAPTURE_METHOD.METADATA_ONLY,
+      captureStatus: CAPTURE_STATUS.BLOCKED,
+      evidenceLevel: EVIDENCE_LEVEL.LOW,
+      captureError: record.captureError || record.error || "Blocked"
+    });
+  }
+
+  if (record.status === SUMMARY_STATUS.DONE && record.structuredSummary) {
+    return baseCaptureMeta({
+      captureMethod: CAPTURE_METHOD.DOM_TEXT,
+      captureStatus: CAPTURE_STATUS.OK,
+      evidenceLevel: EVIDENCE_LEVEL.HIGH
+    });
+  }
+
+  return baseCaptureMeta({
+    captureMethod: CAPTURE_METHOD.METADATA_ONLY,
+    captureStatus: record.status === SUMMARY_STATUS.ERROR ? CAPTURE_STATUS.ERROR : CAPTURE_STATUS.UNSUPPORTED,
+    evidenceLevel: EVIDENCE_LEVEL.LOW,
+    captureError: record.captureError || record.error || ""
+  });
+}
+
+async function repairLegacySummaryCaptureMetadata() {
+  const pageSummaries = await StorageUtils.getPageSummaries();
+  let changed = false;
+
+  for (const records of Object.values(pageSummaries || {})) {
+    for (const record of records || []) {
+      const meta = inferLegacyCaptureMeta(record);
+      if (!meta) {
+        continue;
+      }
+
+      applyCaptureMeta(record, meta);
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    await StorageUtils.setPageSummaries(pageSummaries);
+  }
+
+  return pageSummaries;
+}
+
+async function captureVisibleTabImage(tab) {
+  if (!Number.isInteger(tab?.windowId)) {
+    throw new Error("Screenshot fallback requires an active browser window.");
+  }
+
+  return chrome.tabs.captureVisibleTab(tab.windowId, {
+    format: "jpeg",
+    quality: 72
+  });
+}
+
+async function captureTabImageWithDebugger(tab) {
+  if (!Number.isInteger(tab?.id)) {
+    throw new Error("Debugger screenshot requires a tab id.");
+  }
+
+  const target = { tabId: tab.id };
+  let attached = false;
+  try {
+    await chrome.debugger.attach(target, "1.3");
+    attached = true;
+    const result = await chrome.debugger.sendCommand(target, "Page.captureScreenshot", {
+      format: "jpeg",
+      quality: 72,
+      captureBeyondViewport: false
+    });
+    if (!result?.data) {
+      throw new Error("Debugger screenshot returned no image data.");
+    }
+    return `data:image/jpeg;base64,${result.data}`;
+  } finally {
+    if (attached) {
+      try {
+        await chrome.debugger.detach(target);
+      } catch {
+        // Best-effort detach; the browser also detaches when the worker stops.
+      }
+    }
+  }
+}
+
+async function screenshotDiagnostics(tab, identity, trigger) {
+  let activeTabId = null;
+  let windowFocused = null;
+  let windowType = null;
+  let permissionGranted = false;
+
+  try {
+    const [activeTab] = await chrome.tabs.query({ active: true, windowId: tab.windowId });
+    activeTabId = Number.isInteger(activeTab?.id) ? activeTab.id : null;
+  } catch {
+    activeTabId = null;
+  }
+
+  try {
+    const window = await chrome.windows.get(tab.windowId, { populate: false });
+    windowFocused = Boolean(window?.focused);
+    windowType = window?.type || null;
+  } catch {
+    windowFocused = null;
+    windowType = null;
+  }
+
+  try {
+    permissionGranted = await hasAllUrlsPermission();
+  } catch {
+    permissionGranted = false;
+  }
+
+  return {
+    at: Date.now(),
+    trigger,
+    domain: identity?.domain || "",
+    url: identity?.url || tab?.url || "",
+    tabId: Number.isInteger(tab?.id) ? tab.id : null,
+    windowId: Number.isInteger(tab?.windowId) ? tab.windowId : null,
+    tabActive: Boolean(tab?.active),
+    activeTabId,
+    isActiveTabInWindow: activeTabId === tab?.id,
+    windowFocused,
+    windowType,
+    allUrlsPermission: permissionGranted,
+    screenshotApi: "captureVisibleTab"
+  };
+}
+
+async function captureScreenshotForModel(tab, identity, trigger = "unknown") {
+  const diagnostics = await screenshotDiagnostics(tab, identity, trigger);
+  const attemptedAt = diagnostics.at || Date.now();
+
+  try {
+    let imageDataUrl = "";
+    let screenshotApi = "captureVisibleTab";
+    try {
+      imageDataUrl = await captureVisibleTabImage(tab);
+    } catch (visibleTabError) {
+      screenshotApi = "debugger.Page.captureScreenshot";
+      diagnostics.captureVisibleTabError = visibleTabError.message || String(visibleTabError);
+      diagnostics.screenshotApi = screenshotApi;
+      imageDataUrl = await captureTabImageWithDebugger(tab);
+    }
+    return {
+      imageDataUrl,
+      meta: {
+        screenshotAttemptedAt: attemptedAt,
+        screenshotCapturedAt: Date.now(),
+        screenshotWindowId: tab.windowId,
+        captureDiagnostics: {
+          ...diagnostics,
+          screenshotApi
+        }
+      }
+    };
+  } catch (error) {
+    const wrapped = new Error("screenshot_capture_failed: This site blocked both standard and fallback screenshot capture.");
+    wrapped.screenshotAttemptedAt = attemptedAt;
+    wrapped.captureDiagnostics = {
+      ...diagnostics,
+      finalScreenshotError: error.message || String(error)
+    };
+    throw wrapped;
+  }
+}
+
+async function isVisibleActiveTab(tab) {
+  if (!Number.isInteger(tab?.id) || !Number.isInteger(tab?.windowId)) {
+    return false;
+  }
+
+  try {
+    const [activeTab] = await chrome.tabs.query({ active: true, windowId: tab.windowId });
+    return activeTab?.id === tab.id;
+  } catch {
+    return false;
+  }
+}
+
+async function summarizeScreenshot(tab, identity, settings, { trigger = "summary", onAttempt = null } = {}) {
+  if (!await isVisibleActiveTab(tab)) {
+    throw new Error("Screenshot fallback requires the page to be the visible active tab.");
+  }
+
+  const screenshotCapture = await captureScreenshotForModel(tab, identity, trigger);
+  if (typeof onAttempt === "function") {
+    await onAttempt(screenshotCapture.meta);
+  }
+
+  let result = null;
+  try {
+    result = await callChatModel(
+      settings.summaryModel,
+      settings.summaryModel.prompt,
+      buildScreenshotSummaryContent(identity, tab, screenshotCapture.imageDataUrl),
+      { json: true, maxTokens: 900 }
+    );
+  } catch (error) {
+    error.screenshotAttemptedAt = screenshotCapture.meta.screenshotAttemptedAt;
+    error.screenshotCapturedAt = screenshotCapture.meta.screenshotCapturedAt;
+    error.screenshotWindowId = screenshotCapture.meta.screenshotWindowId;
+    error.captureDiagnostics = screenshotCapture.meta.captureDiagnostics;
+    throw error;
+  }
+
+  return {
+    result,
+    meta: baseCaptureMeta({
+      captureMethod: CAPTURE_METHOD.SCREENSHOT_VISION,
+      captureStatus: CAPTURE_STATUS.OK,
+      evidenceLevel: EVIDENCE_LEVEL.MEDIUM,
+      ...screenshotCapture.meta
+    })
+  };
+}
+
 async function createSummaryRecordForTab(tab, settings, status = SUMMARY_STATUS.PENDING) {
   const identity = UrlUtils.getPageIdentity(tab?.url);
   if (!identity || !Number.isInteger(tab.id) || await isIgnoredIdentity(identity)) {
@@ -1166,7 +1714,10 @@ async function createSummaryRecordForTab(tab, settings, status = SUMMARY_STATUS.
     summary: "",
     structuredSummary: null,
     usage: null,
-    error: ""
+    error: "",
+    ...baseCaptureMeta({
+      captureStatus: CAPTURE_STATUS.UNSUPPORTED
+    })
   };
   pageSummaries[dateKey].push(record);
   await StorageUtils.setPageSummaries(pageSummaries);
@@ -1183,6 +1734,8 @@ async function runSummaryRecord({ tabId, url, summaryId, dateKey, visitId, immed
   setLastSummaryStatus("capturing", "Capturing page content.", { summaryId });
 
   let tab = null;
+  let lastCaptureMeta = baseCaptureMeta();
+  let attemptedScreenshot = false;
   try {
     tab = await chrome.tabs.get(tabId);
   } catch {
@@ -1234,14 +1787,108 @@ async function runSummaryRecord({ tabId, url, summaryId, dateKey, visitId, immed
     });
     await updateVisitSummaryStatus(summaryId, SUMMARY_STATUS.CAPTURING);
 
-    captured = await extractTabContent(tabId, settings.capture.maxContentChars);
-    if (!captured?.text || captured.text.trim().length < 200) {
+    const firstCapture = await captureDomSummarySource(tabId, settings.capture.maxContentChars);
+    captured = firstCapture.captured;
+    let captureMeta = firstCapture.meta;
+    lastCaptureMeta = captureMeta;
+    if (captureMeta.captureStatus === CAPTURE_STATUS.LOW_CONTENT) {
       await delay(1800);
-      captured = await extractTabContent(tabId, settings.capture.maxContentChars);
+      const secondCapture = await captureDomSummarySource(tabId, settings.capture.maxContentChars);
+      captured = secondCapture.captured;
+      captureMeta = secondCapture.meta;
+      lastCaptureMeta = captureMeta;
     }
 
-    if (!captured?.text) {
-      throw new Error("No readable page content found.");
+    await updateSummaryRecord(dateKey, summaryId, (record) => {
+      applyCaptureMeta(record, captureMeta);
+      record.title = captured?.title || tab.title || record.title;
+      record.captureError = captureMeta.captureError || "";
+    });
+
+    if (captureMeta.captureStatus !== CAPTURE_STATUS.OK) {
+      await notifyScreenshotFallbackNeeded(settings, identity.domain);
+
+      if (!isScreenshotFallbackAllowed(settings, identity.domain)) {
+        const updated = await updateSummaryRecord(dateKey, summaryId, (record) => {
+          record.status = SUMMARY_STATUS.ERROR;
+          record.summary = "";
+          record.structuredSummary = null;
+          record.usage = null;
+          record.error = "screenshot_fallback_disabled: Screenshot fallback is disabled or this domain is not allowed for screenshot summaries.";
+          applyCaptureMeta(record, captureMeta);
+          record.captureError = record.error;
+        });
+        await updateVisitSummaryStatus(summaryId, SUMMARY_STATUS.ERROR);
+        setLastSummaryStatus("error", "Screenshot fallback is disabled or this domain is not allowed.", {
+          summaryId,
+          domain: identity.domain,
+          captureStatus: captureMeta.captureStatus
+        });
+        return updated;
+      }
+
+      if (!await isVisibleActiveTab(tab)) {
+        const updated = await updateSummaryRecord(dateKey, summaryId, (record) => {
+          record.status = SUMMARY_STATUS.CAPTURING;
+          record.summary = "";
+          record.structuredSummary = null;
+          record.usage = null;
+          record.error = "screenshot_waiting_for_visible_tab: Page text capture was blocked. Activate this tab so screenshot fallback can summarize it.";
+          applyCaptureMeta(record, {
+            ...captureMeta,
+            captureStatus: CAPTURE_STATUS.WAITING_VISIBLE_TAB
+          });
+          record.captureError = record.error;
+        });
+        await updateVisitSummaryStatus(summaryId, SUMMARY_STATUS.CAPTURING);
+        setLastSummaryStatus("waiting", "Blocked page is waiting for the tab to become visible for screenshot fallback.", {
+          summaryId,
+          domain: identity.domain,
+          captureStatus: CAPTURE_STATUS.WAITING_VISIBLE_TAB
+        });
+        return updated;
+      }
+
+      await updateSummaryRecord(dateKey, summaryId, (record) => {
+        record.status = SUMMARY_STATUS.SUMMARIZING;
+      });
+      await updateVisitSummaryStatus(summaryId, SUMMARY_STATUS.SUMMARIZING);
+      setLastSummaryStatus("summarizing", "Calling summary model with screenshot fallback.", {
+        summaryId,
+        domain: identity.domain
+      });
+
+      attemptedScreenshot = true;
+      const screenshotSummary = await summarizeScreenshot(tab, identity, settings, {
+        trigger: "initial_summary",
+        onAttempt: async (meta) => {
+          await updateSummaryRecord(dateKey, summaryId, (record) => {
+            applyCaptureMeta(record, baseCaptureMeta({
+              captureMethod: CAPTURE_METHOD.SCREENSHOT_VISION,
+              captureStatus: CAPTURE_STATUS.SCREENSHOT_ATTEMPTING,
+              evidenceLevel: EVIDENCE_LEVEL.LOW,
+              ...meta
+            }));
+          });
+        }
+      });
+      lastCaptureMeta = screenshotSummary.meta;
+      const updated = await updateSummaryRecord(dateKey, summaryId, (record) => {
+        record.status = SUMMARY_STATUS.DONE;
+        record.title = tab.title || record.title;
+        record.summary = screenshotSummary.result.text;
+        record.structuredSummary = normalizeSummaryJson(screenshotSummary.result.text);
+        record.usage = screenshotSummary.result.usage;
+        record.error = "";
+        applyCaptureMeta(record, screenshotSummary.meta);
+      });
+      await updateVisitSummaryStatus(summaryId, SUMMARY_STATUS.DONE);
+      await updateScreenshotLastCapture(settings, identity.domain, screenshotSummary.meta.screenshotCapturedAt);
+      setLastSummaryStatus("done", "Screenshot fallback summary completed.", {
+        summaryId,
+        domain: identity.domain
+      });
+      return updated;
     }
 
     await updateSummaryRecord(dateKey, summaryId, (record) => {
@@ -1254,8 +1901,8 @@ async function runSummaryRecord({ tabId, url, summaryId, dateKey, visitId, immed
     const result = await callChatModel(
       settings.summaryModel,
       settings.summaryModel.prompt,
-      `URL: ${identity.url}\nTitle: ${captured.title || tab.title || identity.domain}\n\nContent:\n${captured.text}`,
-      { json: true }
+      buildTextSummaryContent(identity, tab, captured),
+      { json: true, maxTokens: 900 }
     );
     const updated = await updateSummaryRecord(dateKey, summaryId, (record) => {
       record.status = SUMMARY_STATUS.DONE;
@@ -1264,6 +1911,7 @@ async function runSummaryRecord({ tabId, url, summaryId, dateKey, visitId, immed
       record.structuredSummary = normalizeSummaryJson(result.text);
       record.usage = result.usage;
       record.error = "";
+      applyCaptureMeta(record, captureMeta);
     });
     await updateVisitSummaryStatus(summaryId, SUMMARY_STATUS.DONE);
     setLastSummaryStatus("done", "Summary completed.", { summaryId, domain: identity.domain });
@@ -1272,6 +1920,32 @@ async function runSummaryRecord({ tabId, url, summaryId, dateKey, visitId, immed
     const updated = await updateSummaryRecord(dateKey, summaryId, (record) => {
       record.status = SUMMARY_STATUS.ERROR;
       record.error = error.message || "Summary failed.";
+      const message = error.message || "Summary failed.";
+      const fallbackMeta = attemptedScreenshot
+        ? baseCaptureMeta({
+          captureMethod: CAPTURE_METHOD.SCREENSHOT_VISION,
+          captureStatus: CAPTURE_STATUS.ERROR,
+          evidenceLevel: EVIDENCE_LEVEL.LOW,
+          screenshotAttemptedAt: error.screenshotAttemptedAt || null,
+          screenshotCapturedAt: error.screenshotCapturedAt || null,
+          screenshotWindowId: error.screenshotWindowId || null,
+          captureDiagnostics: error.captureDiagnostics || null,
+          captureError: message
+        })
+        : message.toLowerCase().includes("blocked")
+          ? baseCaptureMeta({
+            captureMethod: CAPTURE_METHOD.METADATA_ONLY,
+            captureStatus: CAPTURE_STATUS.BLOCKED,
+            evidenceLevel: EVIDENCE_LEVEL.LOW,
+            captureError: message
+          })
+          : baseCaptureMeta({
+            ...lastCaptureMeta,
+            captureStatus: lastCaptureMeta.captureStatus === CAPTURE_STATUS.UNSUPPORTED ? CAPTURE_STATUS.ERROR : lastCaptureMeta.captureStatus,
+            evidenceLevel: lastCaptureMeta.evidenceLevel || EVIDENCE_LEVEL.LOW,
+            captureError: lastCaptureMeta.captureError || message
+          });
+      applyCaptureMeta(record, fallbackMeta);
     });
     await updateVisitSummaryStatus(summaryId, SUMMARY_STATUS.ERROR);
     setLastSummaryStatus("error", error.message || "Summary failed.", { summaryId });
@@ -1300,10 +1974,152 @@ function scheduleSummaryTask(task) {
   enqueueSummaryOperation(() => runSummaryRecord(task));
 }
 
-async function maybeAutoSummarizeTab(tab) {
+function findSummaryRecord(pageSummaries, summaryId) {
+  if (!summaryId) {
+    return null;
+  }
+
+  for (const [dateKey, records] of Object.entries(pageSummaries || {})) {
+    const record = (records || []).find((item) => item.id === summaryId);
+    if (record) {
+      return { dateKey, record };
+    }
+  }
+
+  return null;
+}
+
+async function updateScreenshotLastCapture(settings, domain, capturedAt) {
+  await StorageUtils.setSettings({
+    ...settings,
+    capture: {
+      ...settings.capture,
+      screenshotLastCaptureByDomain: {
+        ...(settings.capture.screenshotLastCaptureByDomain || {}),
+        [domain]: capturedAt
+      }
+    }
+  });
+}
+
+async function maybeScreenshotFallbackActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  const identity = UrlUtils.getPageIdentity(tab?.url);
+  if (!identity || !Number.isInteger(tab.id) || await isIgnoredIdentity(identity)) {
+    return null;
+  }
+
+  const settings = await StorageUtils.getSettings();
+  if (!isScreenshotFallbackAllowed(settings, identity.domain)) {
+    return null;
+  }
+
+  const state = await StorageUtils.getState();
+  const session = state.openSessions?.[String(tab.id)];
+  if (!session?.visitId || pendingSummaryVisitIds.has(session.visitId)) {
+    return null;
+  }
+
+  const visitEvents = await StorageUtils.getVisitEvents();
+  let summaryId = null;
+  updateVisitEventInStore(visitEvents, session.visitId, (event) => {
+    summaryId = event.summaryId || null;
+  });
+
+  if (!summaryId) {
+    return maybeAutoSummarizeTab(tab, { silentUnsupported: true });
+  }
+
+  const pageSummaries = await StorageUtils.getPageSummaries();
+  const match = findSummaryRecord(pageSummaries, summaryId);
+  if (!match?.record || match.record.status === SUMMARY_STATUS.PENDING || match.record.status === SUMMARY_STATUS.SUMMARIZING) {
+    return null;
+  }
+
+  if (![
+    CAPTURE_STATUS.BLOCKED,
+    CAPTURE_STATUS.LOW_CONTENT,
+    CAPTURE_STATUS.WAITING_VISIBLE_TAB,
+    CAPTURE_STATUS.SCREENSHOT_ATTEMPTING,
+    CAPTURE_STATUS.ERROR
+  ].includes(match.record.captureStatus)) {
+    return null;
+  }
+
+  const lastCapture = Math.max(0, Math.floor(settings.capture.screenshotLastCaptureByDomain?.[identity.domain] || 0));
+  const alreadySummarizedByScreenshot = match.record.captureMethod === CAPTURE_METHOD.SCREENSHOT_VISION
+    && match.record.status === SUMMARY_STATUS.DONE;
+  if (alreadySummarizedByScreenshot && Date.now() - lastCapture < SCREENSHOT_FALLBACK_INTERVAL_MS) {
+    return null;
+  }
+
+  pendingSummaryVisitIds.add(session.visitId);
+  try {
+    setLastSummaryStatus("summarizing", "Running scheduled screenshot fallback.", {
+      domain: identity.domain,
+      summaryId
+    });
+    const screenshotSummary = await summarizeScreenshot(tab, identity, settings, {
+      trigger: "scheduled_fallback",
+      onAttempt: async (meta) => {
+        await updateSummaryRecord(match.dateKey, summaryId, (record) => {
+          applyCaptureMeta(record, baseCaptureMeta({
+            captureMethod: CAPTURE_METHOD.SCREENSHOT_VISION,
+            captureStatus: CAPTURE_STATUS.SCREENSHOT_ATTEMPTING,
+            evidenceLevel: EVIDENCE_LEVEL.LOW,
+            ...meta
+          }));
+        });
+      }
+    });
+    const updated = await updateSummaryRecord(match.dateKey, summaryId, (record) => {
+      record.status = SUMMARY_STATUS.DONE;
+      record.title = tab.title || record.title;
+      record.summary = screenshotSummary.result.text;
+      record.structuredSummary = normalizeSummaryJson(screenshotSummary.result.text);
+      record.usage = screenshotSummary.result.usage;
+      record.error = "";
+      applyCaptureMeta(record, screenshotSummary.meta);
+    });
+    await updateVisitSummaryStatus(summaryId, SUMMARY_STATUS.DONE);
+    await updateScreenshotLastCapture(settings, identity.domain, screenshotSummary.meta.screenshotCapturedAt);
+    setLastSummaryStatus("done", "Scheduled screenshot fallback completed.", {
+      domain: identity.domain,
+      summaryId
+    });
+    return updated;
+  } catch (error) {
+    await updateSummaryRecord(match.dateKey, summaryId, (record) => {
+      record.status = SUMMARY_STATUS.ERROR;
+      record.error = error.message || "Screenshot fallback failed.";
+      applyCaptureMeta(record, baseCaptureMeta({
+        captureMethod: CAPTURE_METHOD.SCREENSHOT_VISION,
+        captureStatus: CAPTURE_STATUS.ERROR,
+        evidenceLevel: EVIDENCE_LEVEL.LOW,
+        screenshotAttemptedAt: error.screenshotAttemptedAt || null,
+        screenshotCapturedAt: error.screenshotCapturedAt || null,
+        screenshotWindowId: error.screenshotWindowId || null,
+        captureDiagnostics: error.captureDiagnostics || null,
+        captureError: error.message || "Screenshot fallback failed."
+      }));
+    });
+    await updateVisitSummaryStatus(summaryId, SUMMARY_STATUS.ERROR);
+    setLastSummaryStatus("error", error.message || "Screenshot fallback failed.", {
+      domain: identity.domain,
+      summaryId
+    });
+    return null;
+  } finally {
+    pendingSummaryVisitIds.delete(session.visitId);
+  }
+}
+
+async function maybeAutoSummarizeTab(tab, { silentUnsupported = false } = {}) {
   const identity = UrlUtils.getPageIdentity(tab?.url);
   if (!identity || !Number.isInteger(tab.id)) {
-    setLastSummaryStatus("skipped", "Current page is not a normal http/https page.");
+    if (!silentUnsupported) {
+      setLastSummaryStatus("skipped", "Current page is not a normal http/https page.");
+    }
     return null;
   }
 
@@ -1372,7 +2188,7 @@ async function maybeAutoSummarizeActiveTab() {
   }
 
   await ensureOpenSessionForTab(tab);
-  return maybeAutoSummarizeTab(tab);
+  return maybeAutoSummarizeTab(tab, { silentUnsupported: true });
 }
 
 function dateRangeKeys(period, endDateKey) {
@@ -1387,52 +2203,100 @@ function dateRangeKeys(period, endDateKey) {
   return keys;
 }
 
-async function runAnalysis(period, endDateKey) {
-  const settings = await StorageUtils.getSettings();
-  const keys = dateRangeKeys(period, endDateKey);
-  const dailyStats = await rebuildAndStoreDailyStats();
-  const visitEvents = await StorageUtils.getVisitEvents();
-  const pageSummaries = await StorageUtils.getPageSummaries();
-  const analysisReports = await StorageUtils.getAnalysisReports();
-  const prompt = period === "month"
-    ? settings.analysisModel.monthlyPrompt
-    : period === "week"
-      ? settings.analysisModel.weeklyPrompt
-      : settings.analysisModel.dailyPrompt;
-  const payload = {
-    period,
-    dates: keys,
-    dailyStats: Object.fromEntries(keys.map((key) => [key, dailyStats[key] || {}])),
-    visitEvents: Object.fromEntries(keys.map((key) => [key, visitEvents[key] || []])),
-    pageSummaries: Object.fromEntries(keys.map((key) => [key, pageSummaries[key] || []]))
-  };
-  const content = JSON.stringify(payload, null, 2).slice(0, 50000);
-  const result = await callChatModel(settings.analysisModel, prompt, content);
-  const report = {
-    id: crypto.randomUUID(),
-    createdAt: Date.now(),
-    period,
-    startDate: keys[0],
-    endDate: keys[keys.length - 1],
-    model: settings.analysisModel.model,
+function evidenceAwareAnalysisPrompt(prompt) {
+  return [
     prompt,
-    report: result.text,
-    usage: result.usage
-  };
+    "",
+    "Use the provided JSON as evidence. Be strict about evidence quality:",
+    "- Separate statistical facts from content-supported conclusions and low-confidence guesses.",
+    "- Treat pageSummaries with evidenceLevel=low or captureMethod=metadata_only as weak evidence only.",
+    "- Do not infer page content from URL/title alone unless you label it as low confidence.",
+    "- Include a short Data gaps section for blocked, low_content, metadata_only, or error captures.",
+    "- Prefer concrete time/domain/page evidence over broad psychological claims."
+  ].join("\n");
+}
 
-  analysisReports[period] = analysisReports[period] || [];
-  analysisReports[period].unshift(report);
-  await StorageUtils.setAnalysisReports(analysisReports);
+async function runAnalysis(period, endDateKey) {
+  const startedAt = Date.now();
+  setLastAnalysisStatus("running", `Running ${period} analysis.`, { period, endDateKey, startedAt });
+  let report = null;
   try {
-    report.backup = await backupWeeksForDateKeys(keys);
-  } catch (error) {
-    report.backup = {
-      skipped: false,
-      error: error.message || "WebDAV backup failed."
+    const settings = await StorageUtils.getSettings();
+    const keys = dateRangeKeys(period, endDateKey);
+    const dailyStats = await rebuildAndStoreDailyStats();
+    const visitEvents = await StorageUtils.getVisitEvents();
+    const pageSummaries = await repairLegacySummaryCaptureMetadata();
+    const analysisReports = await StorageUtils.getAnalysisReports();
+    const prompt = period === "month"
+      ? settings.analysisModel.monthlyPrompt
+      : period === "week"
+        ? settings.analysisModel.weeklyPrompt
+        : settings.analysisModel.dailyPrompt;
+    const payload = {
+      period,
+      dates: keys,
+      dailyStats: Object.fromEntries(keys.map((key) => [key, dailyStats[key] || {}])),
+      visitEvents: Object.fromEntries(keys.map((key) => [key, visitEvents[key] || []])),
+      pageSummaries: Object.fromEntries(keys.map((key) => [key, pageSummaries[key] || []]))
     };
+    const content = JSON.stringify(payload, null, 2).slice(0, 50000);
+    setLastAnalysisStatus("calling_model", `Calling analysis model for ${period}.`, {
+      period,
+      endDateKey,
+      startedAt,
+      inputChars: content.length
+    });
+    const result = await callChatModel(
+      settings.analysisModel,
+      evidenceAwareAnalysisPrompt(prompt),
+      content,
+      {
+        maxTokens: 4096,
+        timeoutMs: ANALYSIS_MODEL_REQUEST_TIMEOUT_MS
+      }
+    );
+    report = {
+      id: crypto.randomUUID(),
+      createdAt: Date.now(),
+      period,
+      startDate: keys[0],
+      endDate: keys[keys.length - 1],
+      model: settings.analysisModel.model,
+      prompt: evidenceAwareAnalysisPrompt(prompt),
+      report: result.text,
+      usage: result.usage
+    };
+
+    analysisReports[period] = analysisReports[period] || [];
+    analysisReports[period].unshift(report);
+    await StorageUtils.setAnalysisReports(analysisReports);
+    try {
+      report.backup = await backupWeeksForDateKeys(keys);
+    } catch (error) {
+      report.backup = {
+        skipped: false,
+        error: error.message || "WebDAV backup failed."
+      };
+    }
+    await StorageUtils.setAnalysisReports(analysisReports);
+    setLastAnalysisStatus("done", `${period} analysis completed.`, {
+      period,
+      endDateKey,
+      startedAt,
+      finishedAt: Date.now(),
+      reportId: report.id
+    });
+    return report;
+  } catch (error) {
+    setLastAnalysisStatus("error", error.message || "Analysis failed.", {
+      period,
+      endDateKey,
+      startedAt,
+      finishedAt: Date.now(),
+      reportId: report?.id || null
+    });
+    throw error;
   }
-  await StorageUtils.setAnalysisReports(analysisReports);
-  return report;
 }
 
 function webdavHeaders(settings, contentType = null) {
@@ -1591,7 +2455,8 @@ async function testModel(target) {
     const result = await callChatModel(
       config,
       `Reply with exactly this token and no other text: ANALYSIS_TEST_${nonce}`,
-      "Connectivity test."
+      "Connectivity test.",
+      { maxTokens: 32, fast: true, timeoutMs: 10 * 1000 }
     );
     if (result.text.trim() !== `ANALYSIS_TEST_${nonce}`) {
       throw new Error("Analysis model returned text, but not the expected test response.");
@@ -1608,14 +2473,11 @@ async function testModel(target) {
     config,
     `Return only this compact JSON and no markdown: {"summary":"SUMMARY_TEST_${nonce}","topics":["api-test"],"contentType":"other","intent":"test","keyPoints":["connectivity"],"confidence":1}`,
     "Connectivity test.",
-    { json: true }
+    { json: true, maxTokens: 96, fast: true, timeoutMs: 10 * 1000 }
   );
   const resultText = result.text;
-
-  let raw = null;
-  try {
-    raw = JSON.parse(resultText);
-  } catch {
+  const raw = parseJsonObjectFromText(resultText);
+  if (!raw) {
     throw new Error("Summary model did not return valid JSON.");
   }
 
@@ -1771,6 +2633,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
       await checkpointActiveSession();
       await syncOpenSessionsWithTabs();
       await checkpointOpenSessions();
+      await maybeScreenshotFallbackActiveTab();
     });
   }
 });
@@ -1793,7 +2656,7 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
     await settleActiveSession();
     const tab = await chrome.tabs.get(activeInfo.tabId);
     await beginSessionForTab(tab, activeInfo.windowId);
-    await maybeAutoSummarizeTab(tab);
+    await maybeAutoSummarizeTab(tab, { silentUnsupported: true });
   });
 });
 
@@ -1819,7 +2682,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     }
 
     if (changeInfo.status === "complete") {
-      await maybeAutoSummarizeTab(tab);
+      await maybeAutoSummarizeTab(tab, { silentUnsupported: true });
     }
 
     const state = await StorageUtils.getState();
@@ -1877,6 +2740,50 @@ chrome.idle.onStateChanged.addListener(async (idleState) => {
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (["GET_SETTINGS", "SAVE_SETTINGS", "TEST_MODEL", "TEST_WEBDAV", "RUN_ANALYSIS", "GET_ANALYSIS_DATA"].includes(message?.type)) {
+    (async () => {
+      if (message.type === "GET_SETTINGS") {
+        sendResponse(await StorageUtils.getSettings());
+        return;
+      }
+
+    if (message.type === "SAVE_SETTINGS") {
+      await StorageUtils.setSettings(message.settings || {});
+      sendResponse(await StorageUtils.getSettings());
+      return;
+    }
+
+      if (message.type === "TEST_MODEL") {
+        sendResponse(await testModel(message.target || "summary"));
+        return;
+      }
+
+      if (message.type === "TEST_WEBDAV") {
+        sendResponse(await testWebdav());
+        return;
+      }
+
+      if (message.type === "RUN_ANALYSIS") {
+        sendResponse(await runAnalysis(message.period || "day", message.endDateKey));
+        return;
+      }
+
+      if (message.type === "GET_ANALYSIS_DATA") {
+        sendResponse({
+          dailyStats: await StorageUtils.getDailyStats(),
+          analysisReports: await StorageUtils.getAnalysisReports(),
+          pageSummaries: await repairLegacySummaryCaptureMetadata(),
+          visitEvents: await StorageUtils.getVisitEvents(),
+          analysisStatus: lastAnalysisStatus
+        });
+      }
+    })().catch((error) => {
+      sendResponse({ error: error.message || "Operation failed" });
+    });
+
+    return true;
+  }
+
   enqueueOperation(async () => {
     if (message?.type === "GET_SNAPSHOT") {
       sendResponse(await getSnapshot());
@@ -1941,8 +2848,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse({
         dailyStats: await StorageUtils.getDailyStats(),
         analysisReports: await StorageUtils.getAnalysisReports(),
-        pageSummaries: await StorageUtils.getPageSummaries(),
-        visitEvents: await StorageUtils.getVisitEvents()
+        pageSummaries: await repairLegacySummaryCaptureMetadata(),
+        visitEvents: await StorageUtils.getVisitEvents(),
+        analysisStatus: lastAnalysisStatus
       });
       return;
     }
@@ -1953,10 +2861,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       await checkpointOpenSessions();
       const dailyStats = await rebuildAndStoreDailyStats();
       const settings = await StorageUtils.getSettings();
+      const pageSummaries = await repairLegacySummaryCaptureMetadata();
       sendResponse({
         dailyStats,
         visitEvents: await StorageUtils.getVisitEvents(),
-        pageSummaries: await StorageUtils.getPageSummaries(),
+        pageSummaries,
         analysisReports: await StorageUtils.getAnalysisReports(),
         summaryDiagnostics: {
           autoSummarize: Boolean(settings.capture.autoSummarize),

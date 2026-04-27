@@ -23,7 +23,14 @@ const openDashboardEl = document.getElementById("openDashboard");
 let snapshot = null;
 
 function sendMessage(message) {
-  return chrome.runtime.sendMessage(message);
+  return chrome.runtime.sendMessage(message).then((response) => {
+    if (response?.error) {
+      const error = new Error(response.error);
+      error.response = response;
+      throw error;
+    }
+    return response;
+  });
 }
 
 function renderTopSites(topSites) {

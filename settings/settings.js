@@ -25,6 +25,9 @@ const fields = {
   monthlyPrompt: document.getElementById("monthlyPrompt"),
   autoSummarize: document.getElementById("autoSummarize"),
   maxContentChars: document.getElementById("maxContentChars"),
+  screenshotFallbackEnabled: document.getElementById("screenshotFallbackEnabled"),
+  screenshotAuthorizedDomains: document.getElementById("screenshotAuthorizedDomains"),
+  screenshotPromptedDomains: document.getElementById("screenshotPromptedDomains"),
   ignoredDomains: document.getElementById("ignoredDomains"),
   webdavUrl: document.getElementById("webdavUrl"),
   webdavUsername: document.getElementById("webdavUsername"),
@@ -32,10 +35,12 @@ const fields = {
   webdavPath: document.getElementById("webdavPath")
 };
 
+let currentSettings = null;
+
 const PROVIDER_BASE_URLS = {
   openai: "https://api.openai.com/v1",
   openrouter: "https://openrouter.ai/api/v1",
-  siliconflow: "https://api.siliconflow.com/v1",
+  siliconflow: "https://api.siliconflow.cn/v1",
   ollama: "http://localhost:11434/v1"
 };
 
@@ -72,6 +77,7 @@ function setLight(light, state) {
 }
 
 function fillForm(settings) {
+  currentSettings = settings;
   fields.summaryProvider.value = settings.summaryModel.provider || "openai";
   fields.summaryBaseUrl.value = settings.summaryModel.baseUrl || settings.summaryModel.endpoint?.replace(/\/chat\/completions$/i, "") || "";
   fields.summaryApiKey.value = settings.summaryModel.apiKey;
@@ -86,6 +92,9 @@ function fillForm(settings) {
   fields.monthlyPrompt.value = settings.analysisModel.monthlyPrompt;
   fields.autoSummarize.checked = Boolean(settings.capture.autoSummarize);
   fields.maxContentChars.value = String(settings.capture.maxContentChars);
+  fields.screenshotFallbackEnabled.checked = settings.capture.screenshotFallbackEnabled !== false;
+  fields.screenshotAuthorizedDomains.value = (settings.capture.screenshotAuthorizedDomains || []).join("\n");
+  fields.screenshotPromptedDomains.value = Object.keys(settings.capture.screenshotPromptedDomains || {}).sort().join("\n");
   fields.ignoredDomains.value = (settings.ignoredDomains || []).join("\n");
   fields.webdavUrl.value = settings.webdav.url;
   fields.webdavUsername.value = settings.webdav.username;
@@ -94,6 +103,7 @@ function fillForm(settings) {
 }
 
 function readForm() {
+  const previousCapture = currentSettings?.capture || {};
   return {
     summaryModel: {
       provider: fields.summaryProvider.value,
@@ -116,7 +126,14 @@ function readForm() {
     capture: {
       autoSummarize: fields.autoSummarize.checked,
       autoSummarizeTouched: true,
-      maxContentChars: Number.parseInt(fields.maxContentChars.value, 10) || 12000
+      maxContentChars: Number.parseInt(fields.maxContentChars.value, 10) || 12000,
+      screenshotFallbackEnabled: fields.screenshotFallbackEnabled.checked,
+      screenshotAuthorizedDomains: fields.screenshotAuthorizedDomains.value
+        .split(/\n|,/)
+        .map((domain) => domain.trim().replace(/^https?:\/\//i, "").replace(/^www\./i, "").split("/")[0].toLowerCase())
+        .filter(Boolean),
+      screenshotPromptedDomains: previousCapture.screenshotPromptedDomains || {},
+      screenshotLastCaptureByDomain: previousCapture.screenshotLastCaptureByDomain || {}
     },
     ignoredDomains: fields.ignoredDomains.value
       .split(/\n|,/)
@@ -163,8 +180,12 @@ async function loadSettings() {
 formEl.addEventListener("submit", async (event) => {
   event.preventDefault();
   setStatus("Saving settings...");
-  fillForm(await sendMessage({ type: "SAVE_SETTINGS", settings: readForm() }));
-  setStatus("Settings saved.");
+  try {
+    fillForm(await sendMessage({ type: "SAVE_SETTINGS", settings: readForm() }));
+    setStatus("Settings saved.");
+  } catch (error) {
+    setStatus(error.message || "Failed to save settings.");
+  }
 });
 
 fields.autoSummarize.addEventListener("change", async () => {
@@ -209,46 +230,56 @@ async function saveBeforeTest() {
   return sendMessage({ type: "SAVE_SETTINGS", settings: readForm() });
 }
 
-testSummaryModelEl.addEventListener("click", async () => {
-  setStatus("Testing summary model...");
-  setLight(summaryTestLightEl, "");
-  await saveBeforeTest();
+async function runButtonTask(button, pendingMessage, task) {
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = "Testing...";
+  setStatus(pendingMessage);
   try {
+    return await task();
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+
+testSummaryModelEl.addEventListener("click", async () => {
+  await runButtonTask(testSummaryModelEl, "Testing summary model...", async () => {
+    setLight(summaryTestLightEl, "");
+    await saveBeforeTest();
     await sendMessage({ type: "TEST_MODEL", target: "summary" });
     setLight(summaryTestLightEl, "ok");
     setStatus("Summary model test passed.");
-  } catch (error) {
+  }).catch((error) => {
     setLight(summaryTestLightEl, "fail");
     setStatus(error.message || "Summary model test failed.");
-  }
+  });
 });
 
 testAnalysisModelEl.addEventListener("click", async () => {
-  setStatus("Testing analysis model...");
-  setLight(analysisTestLightEl, "");
-  await saveBeforeTest();
-  try {
+  await runButtonTask(testAnalysisModelEl, "Testing analysis model...", async () => {
+    setLight(analysisTestLightEl, "");
+    await saveBeforeTest();
     await sendMessage({ type: "TEST_MODEL", target: "analysis" });
     setLight(analysisTestLightEl, "ok");
     setStatus("Analysis model test passed.");
-  } catch (error) {
+  }).catch((error) => {
     setLight(analysisTestLightEl, "fail");
     setStatus(error.message || "Analysis model test failed.");
-  }
+  });
 });
 
 testWebdavEl.addEventListener("click", async () => {
-  setStatus("Testing WebDAV...");
-  setLight(webdavTestLightEl, "");
-  await saveBeforeTest();
-  try {
+  await runButtonTask(testWebdavEl, "Testing WebDAV...", async () => {
+    setLight(webdavTestLightEl, "");
+    await saveBeforeTest();
     await sendMessage({ type: "TEST_WEBDAV" });
     setLight(webdavTestLightEl, "ok");
     setStatus("WebDAV test passed.");
-  } catch (error) {
+  }).catch((error) => {
     setLight(webdavTestLightEl, "fail");
     setStatus(error.message || "WebDAV test failed.");
-  }
+  });
 });
 
 loadSettings();

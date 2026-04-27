@@ -25,6 +25,8 @@ const summarizingCountEl = document.getElementById("summarizingCount");
 const doneCountEl = document.getElementById("doneCount");
 const errorCountEl = document.getElementById("errorCount");
 const unknownUsageCountEl = document.getElementById("unknownUsageCount");
+const dailyTrendEl = document.getElementById("dailyTrend");
+const captureMixEl = document.getElementById("captureMix");
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 let snapshot = null;
@@ -260,6 +262,84 @@ function renderBars(rows) {
   }
 }
 
+function renderDailyTrend(keys) {
+  dailyTrendEl.textContent = "";
+  const rows = keys.map((key) => {
+    const day = snapshot?.dailyStats?.[key] || {};
+    const totals = Object.values(day).reduce((sum, entry) => {
+      const normalized = normalizeEntry(entry);
+      sum.active += normalized.activeSeconds;
+      sum.open += normalized.openSeconds;
+      return sum;
+    }, { active: 0, open: 0 });
+    return { key, ...totals };
+  });
+  const max = Math.max(...rows.map((row) => row.open || row.active), 0);
+  if (!max) {
+    const empty = document.createElement("p");
+    empty.className = "emptyInline";
+    empty.textContent = "No daily trend for this range.";
+    dailyTrendEl.append(empty);
+    return;
+  }
+
+  for (const row of rows) {
+    const item = document.createElement("div");
+    const stack = document.createElement("span");
+    const open = document.createElement("i");
+    const active = document.createElement("b");
+    const label = document.createElement("em");
+    open.style.height = `${Math.max(row.open ? 8 : 0, (row.open / max) * 100)}%`;
+    active.style.height = `${Math.max(row.active ? 8 : 0, (row.active / max) * 100)}%`;
+    label.textContent = row.key.slice(5);
+    item.title = `${row.key}: active ${TimeUtils.formatDuration(row.active)}, open ${TimeUtils.formatDuration(row.open)}`;
+    stack.append(open, active);
+    item.append(stack, label);
+    dailyTrendEl.append(item);
+  }
+}
+
+function increment(map, key) {
+  map.set(key, (map.get(key) || 0) + 1);
+}
+
+function renderMixBars(summaries) {
+  captureMixEl.textContent = "";
+  const counts = new Map();
+  for (const summary of summaries) {
+    increment(counts, `status:${summary.status || "unknown"}`);
+    if (summary.status === "done") {
+      increment(counts, `method:${summary.captureMethod || "unknown"}`);
+      increment(counts, `evidence:${summary.evidenceLevel || "unknown"}`);
+      increment(counts, `type:${summary.structuredSummary?.contentType || "other"}`);
+    }
+  }
+
+  const rows = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 14);
+  const max = Math.max(...rows.map(([, count]) => count), 0);
+  if (!rows.length || !max) {
+    const empty = document.createElement("p");
+    empty.className = "emptyInline";
+    empty.textContent = "Capture mix appears after summaries are generated.";
+    captureMixEl.append(empty);
+    return;
+  }
+
+  for (const [labelText, count] of rows) {
+    const row = document.createElement("div");
+    const label = document.createElement("span");
+    const track = document.createElement("i");
+    const fill = document.createElement("b");
+    const value = document.createElement("strong");
+    label.textContent = labelText;
+    fill.style.width = `${Math.max(4, (count / max) * 100)}%`;
+    value.textContent = String(count);
+    track.append(fill);
+    row.append(label, track, value);
+    captureMixEl.append(row);
+  }
+}
+
 function renderVisits(visits) {
   visitListEl.textContent = "";
   selectedDomainEl.textContent = selectedDomain || "All websites";
@@ -286,7 +366,10 @@ function renderVisits(visits) {
     meta.className = "visitMeta";
     pill.className = `statusPill ${visit.summary?.status || visit.summaryStatus || "none"}`;
     title.textContent = visit.title || visit.domain;
-    meta.textContent = `${opened} | ${visit.domain} | Active ${TimeUtils.formatDuration(visit.activeSeconds || 0)} | Open ${TimeUtils.formatDuration(visit.openSeconds || 0)}`;
+    const capture = visit.summary?.captureMethod
+      ? ` | ${visit.summary.captureMethod}/${visit.summary.evidenceLevel || "unknown"}`
+      : "";
+    meta.textContent = `${opened} | ${visit.domain} | Active ${TimeUtils.formatDuration(visit.activeSeconds || 0)} | Open ${TimeUtils.formatDuration(visit.openSeconds || 0)}${capture}`;
     pill.textContent = visit.summary?.status || visit.summaryStatus || "none";
     button.append(title, meta, pill);
     button.addEventListener("click", () => {
@@ -321,8 +404,14 @@ function renderSummary(summary, visit = null) {
     url: summary.url,
     title: summary.title,
     status: summary.status,
+    captureMethod: summary.captureMethod || "unknown",
+    captureStatus: summary.captureStatus || "unknown",
+    evidenceLevel: summary.evidenceLevel || "unknown",
+    sourceCharCount: summary.sourceCharCount || 0,
+    screenshotCapturedAt: summary.screenshotCapturedAt || null,
     usage: summary.usage || "not reported",
     structuredSummary: summary.structuredSummary,
+    captureError: summary.captureError || "",
     error: summary.error || ""
   }, null, 2);
 }
@@ -337,6 +426,8 @@ function render() {
 
   renderMetrics(rows, summaries, reports);
   renderBars(rows);
+  renderDailyTrend(keys);
+  renderMixBars(summaries);
   renderVisits(visits);
 
   const selectedVisit = findVisitById(visits, selectedVisitId);

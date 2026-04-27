@@ -193,6 +193,7 @@ label {
 
 .metricGrid,
 .visualGrid,
+.recordInsightGrid,
 .detailGrid {
   display: grid;
   gap: 14px;
@@ -248,6 +249,12 @@ label {
 .detailGrid {
   grid-template-columns: minmax(0, 1fr) 420px;
   align-items: start;
+}
+
+.recordInsightGrid {
+  grid-template-columns: minmax(0, 1fr) 420px;
+  align-items: start;
+  margin-bottom: 14px;
 }
 
 .sectionHeader {
@@ -318,6 +325,104 @@ label {
 
 .barTime {
   color: var(--muted);
+  text-align: right;
+}
+
+.dailyTrend {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(26px, 1fr));
+  gap: 8px;
+  min-height: 160px;
+  align-items: end;
+}
+
+.dailyTrend div {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  gap: 8px;
+  height: 160px;
+  min-width: 0;
+}
+
+.dailyTrend span {
+  position: relative;
+  display: block;
+  height: 130px;
+}
+
+.dailyTrend i,
+.dailyTrend b {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  display: block;
+  width: 72%;
+  max-width: 24px;
+  min-height: 0;
+  border-radius: 6px 6px 3px 3px;
+  transform: translateX(-50%);
+}
+
+.dailyTrend i {
+  background: var(--open);
+  opacity: 0.2;
+}
+
+.dailyTrend b {
+  width: 44%;
+  background: var(--active);
+}
+
+.dailyTrend em {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 850;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mixBars {
+  display: grid;
+  gap: 10px;
+}
+
+.mixBars div {
+  display: grid;
+  grid-template-columns: minmax(96px, 0.42fr) minmax(100px, 1fr) 42px;
+  gap: 10px;
+  align-items: center;
+}
+
+.mixBars span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mixBars i {
+  height: 9px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e5eaf2;
+}
+
+.mixBars b {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--purple);
+}
+
+.mixBars strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
   text-align: right;
 }
 

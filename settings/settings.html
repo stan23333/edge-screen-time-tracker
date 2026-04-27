@@ -44,7 +44,7 @@
               <label>API Key<input id="summaryApiKey" type="password" autocomplete="off"></label>
               <label>Model<input id="summaryModel" type="text" placeholder="gpt-4.1-mini"></label>
             </div>
-            <p class="helperText">SiliconFlow uses https://api.siliconflow.com/v1. DeepSeek R1/V3 models do not support JSON mode, so structured summaries fall back to prompt JSON automatically.</p>
+            <p class="helperText">SiliconFlow China mainland endpoint uses https://api.siliconflow.cn/v1. DeepSeek R1/V3 models do not support JSON mode, so structured summaries fall back to prompt JSON automatically.</p>
             <label>Prompt<textarea id="summaryPrompt" rows="5"></textarea></label>
           </div>
 
@@ -79,6 +79,10 @@
             <h2>Capture</h2>
             <label class="checkbox"><input id="autoSummarize" type="checkbox"> Auto summarize pages when they finish loading</label>
             <label>Max content characters<input id="maxContentChars" type="number" min="1000" step="1000"></label>
+            <label class="checkbox"><input id="screenshotFallbackEnabled" type="checkbox"> Allow screenshot fallback for blocked pages</label>
+            <p class="helperText">Screenshots require the extension's all-URLs permission and are taken only when the blocked page is visible. The image is sent to the configured vision-capable summary model and is not stored. Leave the domain list empty to allow all blocked domains.</p>
+            <label>Limit screenshot fallback to these domains<textarea id="screenshotAuthorizedDomains" rows="4" placeholder="optional: chatgpt.com&#10;claude.ai"></textarea></label>
+            <label>Blocked domains awaiting review<textarea id="screenshotPromptedDomains" rows="3" readonly></textarea></label>
           </div>
 
           <div class="panel configSection">
@@ -111,8 +115,8 @@
         <datalist id="baseUrlPresets">
           <option value="https://api.openai.com/v1"></option>
           <option value="https://openrouter.ai/api/v1"></option>
-          <option value="https://api.siliconflow.com/v1"></option>
           <option value="https://api.siliconflow.cn/v1"></option>
+          <option value="https://api.siliconflow.com/v1"></option>
           <option value="http://localhost:11434/v1"></option>
         </datalist>
 

@@ -37,7 +37,11 @@
     capture: {
       autoSummarize: true,
       autoSummarizeTouched: false,
-      maxContentChars: 12000
+      maxContentChars: 12000,
+      screenshotFallbackEnabled: true,
+      screenshotAuthorizedDomains: [],
+      screenshotPromptedDomains: {},
+      screenshotLastCaptureByDomain: {}
     },
     ignoredDomains: []
   };
@@ -88,7 +92,17 @@
         ...(settings?.capture || {}),
         autoSummarize: settings?.capture?.autoSummarizeTouched
           ? Boolean(settings?.capture?.autoSummarize)
-          : true
+          : true,
+        screenshotFallbackEnabled: settings?.capture?.screenshotFallbackEnabled === false ? false : true,
+        screenshotAuthorizedDomains: Array.isArray(settings?.capture?.screenshotAuthorizedDomains)
+          ? settings.capture.screenshotAuthorizedDomains
+          : [],
+        screenshotPromptedDomains: settings?.capture?.screenshotPromptedDomains && typeof settings.capture.screenshotPromptedDomains === "object"
+          ? settings.capture.screenshotPromptedDomains
+          : {},
+        screenshotLastCaptureByDomain: settings?.capture?.screenshotLastCaptureByDomain && typeof settings.capture.screenshotLastCaptureByDomain === "object"
+          ? settings.capture.screenshotLastCaptureByDomain
+          : {}
       },
       ignoredDomains: Array.isArray(settings?.ignoredDomains) ? settings.ignoredDomains : []
     };
