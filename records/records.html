@@ -5,35 +5,39 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Browsing Records</title>
     <link rel="stylesheet" href="records.css">
+    <link rel="stylesheet" href="../shared/app-shell.css">
   </head>
   <body>
-    <main class="page">
-      <header class="topbar">
+    <main class="appShell">
+      <header class="appHeader">
         <div class="brandBlock">
           <img class="mark" src="../assets/icon128.png" alt="">
           <div>
             <p class="eyebrow">Web Screen Time Tracker</p>
             <h1>Records</h1>
-            <span id="timezoneLabel" class="timezoneLabel">Timezone: System</span>
+            <span id="timezoneLabel" class="appMeta timezoneLabel">Timezone: System</span>
           </div>
         </div>
-        <nav>
-          <a href="../dashboard/dashboard.html">Dashboard</a>
-          <a href="../analysis/analysis.html">Analysis</a>
-          <a href="../logs/logs.html">Logs</a>
-          <a href="../settings/settings.html">Settings</a>
+        <nav class="appNav" aria-label="Main navigation">
+          <a class="appNavLink" href="../dashboard/dashboard.html">Dashboard</a>
+          <a class="appNavLink active" href="../records/records.html">Records</a>
+          <a class="appNavLink" href="../analysis/analysis.html">Analysis</a>
+          <a class="appNavLink" href="../logs/logs.html">Logs</a>
+          <a class="appNavLink" href="../settings/settings.html">Settings</a>
         </nav>
       </header>
 
-      <section class="controls panel">
+      <section class="pageToolbar panel">
         <div class="rangeButtons" role="group" aria-label="Date range">
           <button class="active" type="button" data-range="1">Today</button>
           <button type="button" data-range="7">7 days</button>
           <button type="button" data-range="30">30 days</button>
         </div>
         <label>End date<input id="endDate" type="date"></label>
-        <button id="refreshData" type="button">Refresh</button>
-        <button id="exportData" type="button" class="secondary">Export JSON</button>
+        <div class="toolbarActions">
+          <button id="refreshData" type="button">Refresh</button>
+          <button id="exportData" type="button" class="secondary">Export JSON</button>
+        </div>
       </section>
 
       <section class="metricGrid">

@@ -5,28 +5,35 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Web Screen Time Dashboard</title>
     <link rel="stylesheet" href="dashboard.css">
+    <link rel="stylesheet" href="../shared/app-shell.css">
   </head>
   <body>
     <main class="appShell">
-      <header class="topbar">
+      <header class="appHeader">
         <div class="brandBlock">
           <img class="mark" src="../assets/icon128.png" alt="">
           <div>
             <p class="eyebrow">Web Screen Time Tracker</p>
             <h1>Usage analytics</h1>
-            <span id="timezoneLabel" class="timezoneLabel">Timezone: System</span>
+            <span id="timezoneLabel" class="appMeta timezoneLabel">Timezone: System</span>
           </div>
         </div>
-        <div class="controls">
-          <input id="datePicker" type="date">
-          <a class="navLink" href="../records/records.html">Records</a>
-          <a class="navLink" href="../analysis/analysis.html">Analysis</a>
-          <a class="navLink" href="../logs/logs.html">Logs</a>
-          <a class="navLink" href="../settings/settings.html">Settings</a>
+        <nav class="appNav" aria-label="Main navigation">
+          <a class="appNavLink active" href="../dashboard/dashboard.html">Dashboard</a>
+          <a class="appNavLink" href="../records/records.html">Records</a>
+          <a class="appNavLink" href="../analysis/analysis.html">Analysis</a>
+          <a class="appNavLink" href="../logs/logs.html">Logs</a>
+          <a class="appNavLink" href="../settings/settings.html">Settings</a>
+        </nav>
+      </header>
+
+      <section class="pageToolbar panel">
+        <label>Date<input id="datePicker" type="date"></label>
+        <div class="toolbarActions">
           <button id="exportJson" type="button">Export</button>
           <button id="clearDate" type="button" class="danger">Clear</button>
         </div>
-      </header>
+      </section>
 
       <section class="overview">
         <article class="headlineMetric">
