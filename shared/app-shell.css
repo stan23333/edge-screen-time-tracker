@@ -50,6 +50,7 @@ body {
 
 .brandBlock {
   align-items: center;
+  min-height: 72px;
   min-width: 250px;
   gap: 14px;
 }
