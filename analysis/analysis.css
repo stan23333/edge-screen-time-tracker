@@ -479,6 +479,13 @@ input {
   margin: 10px 0;
 }
 
+.markdownBody hr {
+  height: 1px;
+  margin: 18px 0;
+  border: 0;
+  background: linear-gradient(90deg, transparent, #cbd5e1 14%, #cbd5e1 86%, transparent);
+}
+
 .markdownBody ul,
 .markdownBody ol {
   margin: 10px 0 14px;

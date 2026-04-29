@@ -228,6 +228,12 @@ function renderMarkdown(container, markdown) {
       continue;
     }
 
+    if (/^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/.test(line)) {
+      closeList();
+      container.append(document.createElement("hr"));
+      continue;
+    }
+
     if (line.includes("|") && isTableSeparator(lines[index + 1] || "")) {
       closeList();
       const headers = parseTableRow(line);

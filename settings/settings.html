@@ -84,9 +84,9 @@
 
           <div class="panel configSection">
             <h2>Capture</h2>
-            <label class="checkbox"><input id="autoSummarize" type="checkbox"> Auto summarize pages when they finish loading</label>
+            <label class="checkbox"><input id="autoSummarize" type="checkbox" role="switch"> Auto summarize pages when they finish loading</label>
             <label>Max content characters<input id="maxContentChars" type="number" min="1000" step="1000"></label>
-            <label class="checkbox"><input id="screenshotFallbackEnabled" type="checkbox"> Allow screenshot fallback for blocked pages</label>
+            <label class="checkbox"><input id="screenshotFallbackEnabled" type="checkbox" role="switch"> Allow screenshot fallback for blocked pages</label>
             <p class="helperText">Screenshots require the extension's all-URLs permission and are taken only when the blocked page is visible. The image is sent to the configured vision-capable summary model and is not stored. Leave the domain list empty to allow all blocked domains.</p>
             <label>Limit screenshot fallback to these domains<textarea id="screenshotAuthorizedDomains" rows="4" placeholder="optional: chatgpt.com&#10;claude.ai"></textarea></label>
             <label>Blocked domains awaiting review<textarea id="screenshotPromptedDomains" rows="3" readonly></textarea></label>
@@ -101,12 +101,18 @@
             <div class="sectionTop">
               <h2>Local Archive</h2>
               <div class="testRow">
-                <span id="localArchiveStatus">Downloads fallback</span>
+                <span id="localArchiveStatus">Default: Downloads/browser-tracker</span>
                 <button id="testLocalArchive" type="button" class="secondary">Test</button>
               </div>
             </div>
             <label>Downloads folder name<input id="localArchiveDownloadsFolder" type="text" placeholder="browser-tracker"></label>
-            <p class="helperText">The stable fallback saves files under your browser Downloads folder, for example Downloads/browser-tracker.</p>
+            <div class="archiveDestination">
+              <span>Current archive location</span>
+              <strong id="localArchiveDestination">Downloads/browser-tracker</strong>
+            </div>
+            <p id="localArchiveModeNote" class="helperText">Using the default Downloads archive location.</p>
+            <label class="checkbox"><input id="autoBackup" type="checkbox" role="switch" checked> Auto backup when browser is idle</label>
+            <p id="autoBackupStatus" class="helperText">No automatic backup has run yet.</p>
             <button id="chooseLocalArchiveFolder" type="button" class="secondary">Choose local archive folder</button>
             <p class="helperText">If your browser supports folder access, the extension will write to the chosen folder first and fall back to Downloads if permission is unavailable.</p>
           </div>
@@ -145,7 +151,7 @@
           <h2>Status</h2>
           <p id="statusText">Ready.</p>
           <button id="summarizeNow" type="button">Summarize Current Page</button>
-          <button id="backupNow" type="button" class="secondary">Backup Now</button>
+          <button id="backupNow" type="button" class="secondary">Manual Backup Now</button>
           <button id="exportData" type="button" class="secondary">Export Full JSON</button>
         </aside>
       </section>

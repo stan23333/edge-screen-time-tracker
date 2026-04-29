@@ -42,6 +42,9 @@
       directoryName: "",
       directoryGrantedAt: 0
     },
+    autoBackup: {
+      enabled: true
+    },
     capture: {
       autoSummarize: true,
       autoSummarizeTouched: false,
@@ -52,6 +55,14 @@
       screenshotLastCaptureByDomain: {}
     },
     ignoredDomains: []
+  };
+
+  const DEFAULT_AUTO_BACKUP_STATE = {
+    lastCoveredDateKey: "",
+    pendingRemoteDateKeys: [],
+    lastAttemptAt: 0,
+    lastSuccessAt: 0,
+    lastError: ""
   };
 
   function get(keys) {
@@ -104,6 +115,11 @@
           .replace(/\.\./g, "")
           .trim() || DEFAULT_SETTINGS.localArchive.downloadsFolder
       },
+      autoBackup: {
+        ...DEFAULT_SETTINGS.autoBackup,
+        ...(settings?.autoBackup || {}),
+        enabled: settings?.autoBackup?.enabled === false ? false : true
+      },
       capture: {
         ...DEFAULT_SETTINGS.capture,
         ...(settings?.capture || {}),
@@ -122,6 +138,23 @@
           : {}
       },
       ignoredDomains: Array.isArray(settings?.ignoredDomains) ? settings.ignoredDomains : []
+    };
+  }
+
+  function mergeAutoBackupState(state) {
+    const lastCoveredDateKey = safeText(state?.lastCoveredDateKey);
+    return {
+      ...DEFAULT_AUTO_BACKUP_STATE,
+      ...(state || {}),
+      lastCoveredDateKey: /^\d{4}-\d{2}-\d{2}$/.test(lastCoveredDateKey) ? lastCoveredDateKey : "",
+      pendingRemoteDateKeys: Array.isArray(state?.pendingRemoteDateKeys)
+        ? [...new Set(state.pendingRemoteDateKeys
+          .map((dateKey) => safeText(dateKey))
+          .filter((dateKey) => /^\d{4}-\d{2}-\d{2}$/.test(dateKey)))].sort()
+        : [],
+      lastAttemptAt: Number.isFinite(Number(state?.lastAttemptAt)) ? Number(state.lastAttemptAt) : 0,
+      lastSuccessAt: Number.isFinite(Number(state?.lastSuccessAt)) ? Number(state.lastSuccessAt) : 0,
+      lastError: safeText(state?.lastError)
     };
   }
 
@@ -159,6 +192,15 @@
 
   async function setAnalysisReports(analysisReports) {
     await set({ analysisReports });
+  }
+
+  async function getAutoBackupState() {
+    const { autoBackupState = DEFAULT_AUTO_BACKUP_STATE } = await get({ autoBackupState: DEFAULT_AUTO_BACKUP_STATE });
+    return mergeAutoBackupState(autoBackupState);
+  }
+
+  async function setAutoBackupState(autoBackupState) {
+    await set({ autoBackupState: mergeAutoBackupState(autoBackupState) });
   }
 
   function safeText(value, fallback = "") {
@@ -215,6 +257,7 @@
     clearDiagnosticLogs,
     get,
     getAnalysisReports,
+    getAutoBackupState,
     getDailyStats,
     getDiagnosticLogs,
     getPageSummaries,
@@ -223,6 +266,7 @@
     getVisitEvents,
     set,
     setAnalysisReports,
+    setAutoBackupState,
     setDailyStats,
     setDiagnosticLogs,
     setPageSummaries,

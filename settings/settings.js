@@ -12,6 +12,9 @@ const summaryTestLightEl = document.getElementById("summaryTestLight");
 const analysisTestLightEl = document.getElementById("analysisTestLight");
 const webdavTestLightEl = document.getElementById("webdavTestLight");
 const localArchiveStatusEl = document.getElementById("localArchiveStatus");
+const localArchiveDestinationEl = document.getElementById("localArchiveDestination");
+const localArchiveModeNoteEl = document.getElementById("localArchiveModeNote");
+const autoBackupStatusEl = document.getElementById("autoBackupStatus");
 
 const fields = {
   summaryProvider: document.getElementById("summaryProvider"),
@@ -33,6 +36,7 @@ const fields = {
   screenshotPromptedDomains: document.getElementById("screenshotPromptedDomains"),
   ignoredDomains: document.getElementById("ignoredDomains"),
   localArchiveDownloadsFolder: document.getElementById("localArchiveDownloadsFolder"),
+  autoBackup: document.getElementById("autoBackup"),
   webdavUrl: document.getElementById("webdavUrl"),
   webdavUsername: document.getElementById("webdavUsername"),
   webdavPassword: document.getElementById("webdavPassword"),
@@ -107,6 +111,61 @@ function setLight(light, state) {
   light.classList.toggle("fail", state === "fail");
 }
 
+function formatStatusTime(timestamp) {
+  return timestamp ? new Date(timestamp).toLocaleString() : "";
+}
+
+function renderAutoBackupStatus(state = {}) {
+  const details = [];
+  if (state.enabled === false) {
+    details.push("Off");
+  }
+  if (state.lastSuccessAt) {
+    details.push(`Last success: ${formatStatusTime(state.lastSuccessAt)}`);
+  }
+  if (state.lastCoveredDateKey) {
+    details.push(`Covered through: ${state.lastCoveredDateKey}`);
+  }
+  if (state.pendingRemoteDateKeys?.length) {
+    details.push(`WebDAV pending: ${state.pendingRemoteDateKeys.length} date${state.pendingRemoteDateKeys.length === 1 ? "" : "s"}`);
+  }
+  if (state.lastError) {
+    details.push(`Last issue: ${state.lastError}`);
+  }
+  autoBackupStatusEl.textContent = details.length
+    ? details.join(" · ")
+    : "No automatic backup has run yet.";
+}
+
+function downloadsArchivePath(settings) {
+  return `Downloads/${settings?.localArchive?.downloadsFolder || "browser-tracker"}`;
+}
+
+function renderLocalArchiveLocation(settings) {
+  const downloadsPath = downloadsArchivePath(settings);
+  if (settings.localArchive?.mode === "directory") {
+    const folderName = settings.localArchive.directoryName || "Selected folder";
+    localArchiveStatusEl.textContent = `Selected: ${folderName}`;
+    localArchiveDestinationEl.textContent = folderName;
+    localArchiveModeNoteEl.textContent = `Primary location is the selected folder. Fallback is ${downloadsPath}.`;
+    chooseLocalArchiveFolderEl.textContent = "Change archive folder";
+    return;
+  }
+
+  localArchiveStatusEl.textContent = `Default: ${downloadsPath}`;
+  localArchiveDestinationEl.textContent = downloadsPath;
+  localArchiveModeNoteEl.textContent = "Using the default Downloads archive location.";
+  chooseLocalArchiveFolderEl.textContent = "Choose local archive folder";
+}
+
+async function refreshAutoBackupStatus() {
+  try {
+    renderAutoBackupStatus(await sendMessage({ type: "GET_AUTO_BACKUP_STATUS" }));
+  } catch (error) {
+    autoBackupStatusEl.textContent = error.message || "Automatic backup status is unavailable.";
+  }
+}
+
 function fillForm(settings) {
   currentSettings = settings;
   fields.summaryProvider.value = settings.summaryModel.provider || "openai";
@@ -128,9 +187,8 @@ function fillForm(settings) {
   fields.screenshotPromptedDomains.value = Object.keys(settings.capture.screenshotPromptedDomains || {}).sort().join("\n");
   fields.ignoredDomains.value = (settings.ignoredDomains || []).join("\n");
   fields.localArchiveDownloadsFolder.value = settings.localArchive?.downloadsFolder || "browser-tracker";
-  localArchiveStatusEl.textContent = settings.localArchive?.mode === "directory"
-    ? `Folder: ${settings.localArchive.directoryName || "selected"}`
-    : "Downloads fallback";
+  fields.autoBackup.checked = settings.autoBackup?.enabled !== false;
+  renderLocalArchiveLocation(settings);
   fields.webdavUrl.value = settings.webdav.url;
   fields.webdavUsername.value = settings.webdav.username;
   fields.webdavPassword.value = settings.webdav.password;
@@ -178,6 +236,9 @@ function readForm() {
       ...(currentSettings?.localArchive || {}),
       downloadsFolder: fields.localArchiveDownloadsFolder.value.trim() || "browser-tracker"
     },
+    autoBackup: {
+      enabled: fields.autoBackup.checked
+    },
     webdav: {
       url: fields.webdavUrl.value.trim(),
       username: fields.webdavUsername.value.trim(),
@@ -214,6 +275,7 @@ function downloadJson(filename, data) {
 
 async function loadSettings() {
   fillForm(await sendMessage({ type: "GET_SETTINGS" }));
+  await refreshAutoBackupStatus();
 }
 
 formEl.addEventListener("submit", async (event) => {
@@ -221,6 +283,7 @@ formEl.addEventListener("submit", async (event) => {
   setStatus("Saving settings...");
   try {
     fillForm(await sendMessage({ type: "SAVE_SETTINGS", settings: readForm() }));
+    await refreshAutoBackupStatus();
     setStatus("Settings saved.");
   } catch (error) {
     setStatus(error.message || "Failed to save settings.");
@@ -237,8 +300,19 @@ fields.autoSummarize.addEventListener("change", async () => {
   }
 });
 
+fields.autoBackup.addEventListener("change", async () => {
+  setStatus("Saving auto backup setting...");
+  try {
+    fillForm(await sendMessage({ type: "SAVE_SETTINGS", settings: readForm() }));
+    await refreshAutoBackupStatus();
+    setStatus(fields.autoBackup.checked ? "Auto backup is on." : "Auto backup is off.");
+  } catch (error) {
+    setStatus(error.message || "Failed to save auto backup setting.");
+  }
+});
+
 backupNowEl.addEventListener("click", async () => {
-  setStatus("Archiving locally and backing up to WebDAV...");
+  setStatus("Running manual archive and WebDAV backup...");
   try {
     const result = await sendMessage({ type: "BACKUP_WEBDAV" });
     const localRecordCount = result.local?.records?.results?.length || 0;
@@ -347,9 +421,7 @@ testLocalArchiveEl.addEventListener("click", async () => {
   await runButtonTask(testLocalArchiveEl, "Testing local archive...", async () => {
     await saveBeforeTest();
     const result = await sendMessage({ type: "TEST_LOCAL_ARCHIVE" });
-    localArchiveStatusEl.textContent = result.mode === "directory"
-      ? `Folder: ${currentSettings?.localArchive?.directoryName || "selected"}`
-      : "Downloads fallback";
+    renderLocalArchiveLocation(currentSettings);
     const fallbackNote = result.status === "fallback" ? ` Fallback reason: ${result.fallbackReason}` : "";
     setStatus(`Local archive test passed: ${result.displayPath || result.relativePath}.${fallbackNote}`);
   }).catch((error) => {

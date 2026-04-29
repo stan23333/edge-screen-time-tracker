@@ -4,6 +4,7 @@ const IDLE_THRESHOLD_SECONDS = 300;
 const CHECKPOINT_ALARM = "checkpoint-active-session";
 const SUSPEND_GAP_MS = 10 * 60 * 1000;
 const SCREENSHOT_FALLBACK_INTERVAL_MS = 10 * 60 * 1000;
+const AUTO_BACKUP_MIN_INTERVAL_MS = 60 * 60 * 1000;
 const MODEL_REQUEST_TIMEOUT_MS = 15 * 1000;
 const ANALYSIS_MODEL_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 const MIN_SUMMARY_TEXT_CHARS = 200;
@@ -51,6 +52,7 @@ const LOG_ARRAY_ITEMS = 25;
 let operationQueue = Promise.resolve();
 let summaryQueue = Promise.resolve();
 let diagnosticLogQueue = Promise.resolve();
+let autoBackupRunning = false;
 const pendingSummaryVisitIds = new Set();
 let lastSummaryStatus = {
   at: 0,
@@ -3261,46 +3263,61 @@ function reportsForDateKeys(reports, dateKeys) {
     .filter((report) => allowed.has(report.endDate) || allowed.has(TimeUtils.dateKeyFromTimestamp(report.createdAt)));
 }
 
-async function backupToWebdav() {
+function uniqueDateKeys(dateKeys) {
+  return [...new Set((dateKeys || [])
+    .map((dateKey) => String(dateKey || "").trim())
+    .filter((dateKey) => /^\d{4}-\d{2}-\d{2}$/.test(dateKey)))]
+    .sort();
+}
+
+function currentWeekDateKeys() {
   const range = TimeUtils.weekRangeFromTimestamp(Date.now());
-  const settings = await StorageUtils.getSettings();
   const dateKeys = [];
   for (let cursor = range.startTs; cursor < range.endTs; cursor += 24 * 60 * 60 * 1000) {
     dateKeys.push(TimeUtils.dateKeyFromTimestamp(cursor));
   }
+  return dateKeys;
+}
+
+async function backupDateKeys(dateKeys, options = {}) {
+  const normalizedDateKeys = uniqueDateKeys(dateKeys);
+  const settings = await StorageUtils.getSettings();
+  const logSource = options.logSource || "settings";
+  const operationPrefix = options.operationPrefix || "backup";
 
   const local = {};
   const remote = {};
   try {
-    local.records = await archiveDailyRecordsForDateKeys(dateKeys);
+    local.records = await archiveDailyRecordsForDateKeys(normalizedDateKeys);
   } catch (error) {
     local.records = { status: "error", error: error.message || "Local archive failed.", results: [] };
     await addDiagnosticLog({
       level: "error",
       priority: "medium",
-      source: "settings",
+      source: logSource,
       category: "storage",
-      operation: "backup_records_local",
+      operation: `${operationPrefix}_records_local`,
       message: error.message || "Local archive failed.",
-      details: { dateKeys },
+      details: { dateKeys: normalizedDateKeys, trigger: options.trigger || "" },
       error
     });
   }
   try {
-    remote.records = await backupDailyRecordsForDateKeys(dateKeys);
+    remote.records = await backupDailyRecordsForDateKeys(normalizedDateKeys);
   } catch (error) {
     remote.records = { status: "error", error: error.message || "WebDAV backup failed.", results: [] };
     await addDiagnosticLog({
       level: "error",
       priority: "medium",
-      source: "settings",
+      source: logSource,
       category: settings.webdav.url ? "external" : "configuration",
-      operation: "backup_records_webdav",
+      operation: `${operationPrefix}_records_webdav`,
       message: error.message || "WebDAV backup failed.",
       endpoint: settings.webdav.url,
       status: error.status || null,
       details: {
-        dateKeys,
+        dateKeys: normalizedDateKeys,
+        trigger: options.trigger || "",
         diagnostic: error.diagnostic || null
       },
       error
@@ -3310,7 +3327,7 @@ async function backupToWebdav() {
   const analysisReports = await StorageUtils.getAnalysisReports();
   local.analysis = [];
   remote.analysis = [];
-  for (const report of reportsForDateKeys(analysisReports, dateKeys)) {
+  for (const report of reportsForDateKeys(analysisReports, normalizedDateKeys)) {
     report.backup = report.backup || {};
     try {
       report.backup.local = await archiveAnalysisReportToLocal(report);
@@ -3321,15 +3338,16 @@ async function backupToWebdav() {
       await addDiagnosticLog({
         level: "error",
         priority: "medium",
-        source: "settings",
+        source: logSource,
         category: "storage",
-        operation: "backup_analysis_local",
+        operation: `${operationPrefix}_analysis_local`,
         message: error.message || "Local archive failed.",
         reportId: report.id,
         details: {
           period: report.period,
           startDate: report.startDate,
-          endDate: report.endDate
+          endDate: report.endDate,
+          trigger: options.trigger || ""
         },
         error
       });
@@ -3343,9 +3361,9 @@ async function backupToWebdav() {
       await addDiagnosticLog({
         level: "error",
         priority: "medium",
-        source: "settings",
+        source: logSource,
         category: settings.webdav.url ? "external" : "configuration",
-        operation: "backup_analysis_webdav",
+        operation: `${operationPrefix}_analysis_webdav`,
         message: error.message || "WebDAV backup failed.",
         reportId: report.id,
         endpoint: settings.webdav.url,
@@ -3354,6 +3372,7 @@ async function backupToWebdav() {
           period: report.period,
           startDate: report.startDate,
           endDate: report.endDate,
+          trigger: options.trigger || "",
           diagnostic: error.diagnostic || null
         },
         error
@@ -3364,11 +3383,240 @@ async function backupToWebdav() {
 
   return {
     backedUpAt: Date.now(),
+    dateKeys: normalizedDateKeys,
     local,
     remote,
     records: remote.records,
     analysis: remote.analysis
   };
+}
+
+async function backupToWebdav() {
+  return backupDateKeys(currentWeekDateKeys(), {
+    logSource: "settings",
+    operationPrefix: "backup",
+    trigger: "manual"
+  });
+}
+
+function dateKeyTimestamp(dateKey) {
+  const [year, month, day] = String(dateKey || "").split("-").map((part) => Number.parseInt(part, 10));
+  if (!year || !month || !day) {
+    return null;
+  }
+
+  const date = new Date(year, month - 1, day);
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
+    return null;
+  }
+  return date.getTime();
+}
+
+function addDaysToDateKey(dateKey, days) {
+  const timestamp = dateKeyTimestamp(dateKey);
+  if (!Number.isFinite(timestamp)) {
+    return "";
+  }
+
+  const date = new Date(timestamp);
+  date.setDate(date.getDate() + days);
+  return TimeUtils.dateKeyFromTimestamp(date.getTime());
+}
+
+function yesterdayDateKey(now = Date.now()) {
+  const date = new Date(now);
+  return TimeUtils.dateKeyFromTimestamp(new Date(date.getFullYear(), date.getMonth(), date.getDate() - 1).getTime());
+}
+
+function dateKeyRange(startDateKey, endDateKey) {
+  const dates = [];
+  if (!dateKeyTimestamp(startDateKey) || !dateKeyTimestamp(endDateKey) || startDateKey > endDateKey) {
+    return dates;
+  }
+
+  for (let cursor = startDateKey; cursor && cursor <= endDateKey; cursor = addDaysToDateKey(cursor, 1)) {
+    dates.push(cursor);
+  }
+  return dates;
+}
+
+function maxDateKey(dateKeys) {
+  const sorted = uniqueDateKeys(dateKeys);
+  return sorted.length ? sorted[sorted.length - 1] : "";
+}
+
+function autoBackupDateKeys(state, now = Date.now()) {
+  const yesterday = yesterdayDateKey(now);
+  const pendingRemoteDateKeys = uniqueDateKeys(state?.pendingRemoteDateKeys || [])
+    .filter((dateKey) => dateKey <= yesterday);
+  const lastCoveredDateKey = dateKeyTimestamp(state?.lastCoveredDateKey)
+    ? state.lastCoveredDateKey
+    : "";
+  const missedDateKeys = lastCoveredDateKey
+    ? dateKeyRange(addDaysToDateKey(lastCoveredDateKey, 1), yesterday)
+    : [yesterday];
+  return uniqueDateKeys([...pendingRemoteDateKeys, ...missedDateKeys]);
+}
+
+function backupItemsHaveError(items) {
+  return (items || []).some((item) => item?.status === "error");
+}
+
+function backupResultHasRemoteFailure(result) {
+  return result?.remote?.records?.status === "error" || backupItemsHaveError(result?.remote?.analysis);
+}
+
+function backupResultError(result) {
+  if (result?.local?.records?.status === "error") {
+    return result.local.records.error || "Local archive failed.";
+  }
+  if (backupItemsHaveError(result?.local?.analysis)) {
+    return "Some local analysis reports failed to archive.";
+  }
+  if (result?.remote?.records?.status === "error") {
+    return result.remote.records.error || "WebDAV backup failed.";
+  }
+  if (backupItemsHaveError(result?.remote?.analysis)) {
+    return "Some analysis reports failed to mirror to WebDAV.";
+  }
+  return "";
+}
+
+function successfulLocalRecordDateKeys(result) {
+  if (result?.local?.records?.status === "error") {
+    return [];
+  }
+  return uniqueDateKeys((result?.local?.records?.results || [])
+    .filter((item) => item?.status !== "error")
+    .map((item) => item.dateKey));
+}
+
+async function getAutoBackupStatus() {
+  const settings = await StorageUtils.getSettings();
+  const state = await StorageUtils.getAutoBackupState();
+  return {
+    enabled: settings.autoBackup?.enabled !== false,
+    nextDateKeys: autoBackupDateKeys(state),
+    ...state
+  };
+}
+
+async function currentIdleState() {
+  try {
+    return await chrome.idle.queryState(IDLE_THRESHOLD_SECONDS);
+  } catch {
+    const state = await StorageUtils.getState();
+    return state.idleState;
+  }
+}
+
+async function maybeRunAutoBackup(trigger = "unknown", observedIdleState = "") {
+  const settings = await StorageUtils.getSettings();
+  if (settings.autoBackup?.enabled === false) {
+    return { skipped: true, reason: "Auto backup is disabled." };
+  }
+
+  const idleState = observedIdleState || await currentIdleState();
+  await StorageUtils.set({ idleState });
+  if (!["idle", "locked"].includes(idleState)) {
+    return { skipped: true, reason: "Browser is not idle." };
+  }
+
+  if (autoBackupRunning) {
+    return { skipped: true, reason: "Auto backup is already running." };
+  }
+
+  const autoBackupState = await StorageUtils.getAutoBackupState();
+  const now = Date.now();
+  if (autoBackupState.lastAttemptAt && now - autoBackupState.lastAttemptAt < AUTO_BACKUP_MIN_INTERVAL_MS) {
+    return { skipped: true, reason: "Auto backup was attempted recently." };
+  }
+
+  const dateKeys = autoBackupDateKeys(autoBackupState, now);
+  if (!dateKeys.length) {
+    return { skipped: true, reason: "No completed dates need backup." };
+  }
+
+  autoBackupRunning = true;
+  await StorageUtils.setAutoBackupState({
+    ...autoBackupState,
+    lastAttemptAt: now,
+    lastError: ""
+  });
+
+  try {
+    const result = await backupDateKeys(dateKeys, {
+      logSource: "auto_backup",
+      operationPrefix: "auto_backup",
+      trigger
+    });
+    const latestState = await StorageUtils.getAutoBackupState();
+    const successfulLocalDates = successfulLocalRecordDateKeys(result);
+    const attempted = new Set(dateKeys);
+    let pendingRemoteDateKeys = uniqueDateKeys(latestState.pendingRemoteDateKeys)
+      .filter((dateKey) => !attempted.has(dateKey) && dateKey <= yesterdayDateKey(now));
+    if (backupResultHasRemoteFailure(result)) {
+      pendingRemoteDateKeys = uniqueDateKeys([...pendingRemoteDateKeys, ...dateKeys]);
+    }
+
+    const coveredDateKey = maxDateKey([
+      latestState.lastCoveredDateKey,
+      ...successfulLocalDates
+    ]);
+    const nextState = {
+      ...latestState,
+      lastAttemptAt: now,
+      lastCoveredDateKey: coveredDateKey || latestState.lastCoveredDateKey,
+      pendingRemoteDateKeys,
+      lastSuccessAt: successfulLocalDates.length ? Date.now() : latestState.lastSuccessAt,
+      lastError: backupResultError(result)
+    };
+    await StorageUtils.setAutoBackupState(nextState);
+    await addDiagnosticLog({
+      level: nextState.lastError ? "error" : "info",
+      priority: nextState.lastError ? "medium" : "low",
+      source: "auto_backup",
+      category: nextState.lastError ? "storage" : "configuration",
+      operation: "auto_backup",
+      message: nextState.lastError || "Auto backup completed.",
+      details: {
+        trigger,
+        dateKeys,
+        lastCoveredDateKey: nextState.lastCoveredDateKey,
+        pendingRemoteDateKeys
+      }
+    });
+    return {
+      ...result,
+      autoBackupState: nextState
+    };
+  } catch (error) {
+    const latestState = await StorageUtils.getAutoBackupState();
+    const nextState = {
+      ...latestState,
+      lastAttemptAt: now,
+      lastError: error.message || "Auto backup failed."
+    };
+    await StorageUtils.setAutoBackupState(nextState);
+    await addDiagnosticLog({
+      level: "error",
+      priority: "medium",
+      source: "auto_backup",
+      category: errorCategory(error, "storage"),
+      operation: "auto_backup",
+      message: error.message || "Auto backup failed.",
+      status: error.status || null,
+      details: {
+        trigger,
+        dateKeys,
+        diagnostic: error.diagnostic || null
+      },
+      error
+    });
+    return { error: error.message || "Auto backup failed.", autoBackupState: nextState };
+  } finally {
+    autoBackupRunning = false;
+  }
 }
 
 async function testLocalArchive() {
@@ -3767,6 +4015,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
       await syncOpenSessionsWithTabs();
       await checkpointOpenSessions();
       await maybeScreenshotFallbackActiveTab();
+      await maybeRunAutoBackup("checkpoint_alarm");
     });
   }
 });
@@ -3864,16 +4113,20 @@ chrome.idle.onStateChanged.addListener(async (idleState) => {
     if (idleState === "locked") {
       await settleActiveSession();
       await StorageUtils.set({ idleState, activeSession: null });
+      await maybeRunAutoBackup("idle_locked", idleState);
       return;
     }
 
     await StorageUtils.set({ idleState });
     await refreshFocusedSession();
+    if (idleState === "idle") {
+      await maybeRunAutoBackup("idle_state", idleState);
+    }
   });
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (["GET_SETTINGS", "SAVE_SETTINGS", "TEST_MODEL", "TEST_LOCAL_ARCHIVE", "OPEN_LOCAL_ARCHIVE", "TEST_WEBDAV", "RUN_ANALYSIS", "GET_ANALYSIS_DATA", "GET_LOGS", "ADD_LOG", "CLEAR_LOGS", "EXPORT_LOGS"].includes(message?.type)) {
+  if (["GET_SETTINGS", "SAVE_SETTINGS", "GET_AUTO_BACKUP_STATUS", "TEST_MODEL", "TEST_LOCAL_ARCHIVE", "OPEN_LOCAL_ARCHIVE", "TEST_WEBDAV", "RUN_ANALYSIS", "GET_ANALYSIS_DATA", "GET_LOGS", "ADD_LOG", "CLEAR_LOGS", "EXPORT_LOGS"].includes(message?.type)) {
     (async () => {
       if (message.type === "GET_LOGS") {
         sendResponse({
@@ -3909,11 +4162,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         return;
       }
 
-    if (message.type === "SAVE_SETTINGS") {
-      await StorageUtils.setSettings(message.settings || {});
-      sendResponse(await StorageUtils.getSettings());
-      return;
-    }
+      if (message.type === "SAVE_SETTINGS") {
+        await StorageUtils.setSettings(message.settings || {});
+        sendResponse(await StorageUtils.getSettings());
+        return;
+      }
+
+      if (message.type === "GET_AUTO_BACKUP_STATUS") {
+        sendResponse(await getAutoBackupStatus());
+        return;
+      }
 
       if (message.type === "TEST_MODEL") {
         sendResponse(await testModel(message.target || "summary"));
