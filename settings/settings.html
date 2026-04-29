@@ -92,6 +92,20 @@
 
           <div class="panel configSection">
             <div class="sectionTop">
+              <h2>Local Archive</h2>
+              <div class="testRow">
+                <span id="localArchiveStatus">Downloads fallback</span>
+                <button id="testLocalArchive" type="button" class="secondary">Test</button>
+              </div>
+            </div>
+            <label>Downloads folder name<input id="localArchiveDownloadsFolder" type="text" placeholder="browser-tracker"></label>
+            <p class="helperText">The stable fallback saves files under your browser Downloads folder, for example Downloads/browser-tracker.</p>
+            <button id="chooseLocalArchiveFolder" type="button" class="secondary">Choose local archive folder</button>
+            <p class="helperText">If your browser supports folder access, the extension will write to the chosen folder first and fall back to Downloads if permission is unavailable.</p>
+          </div>
+
+          <div class="panel configSection">
+            <div class="sectionTop">
               <h2>WebDAV Backup</h2>
               <div class="testRow">
                 <span><i id="webdavTestLight" class="light"></i>WebDAV</span>
@@ -103,8 +117,8 @@
               <label>Username<input id="webdavUsername" type="text"></label>
               <label>Password<input id="webdavPassword" type="password" autocomplete="off"></label>
             </div>
-            <label>Backup folder<input id="webdavPath" type="text" placeholder="browser-tracker"></label>
-            <p class="helperText">Weekly archives are uploaded after analysis to weeks/YYYY-Www.json.</p>
+            <label>WebDAV Backup folder<input id="webdavPath" type="text" placeholder="browser-tracker"></label>
+            <p class="helperText">WebDAV mirrors the local archive structure to records/YYYY/MM/*.json and analysis/YYYY/MM/*.md.</p>
           </div>
 
           <div class="panel actions">

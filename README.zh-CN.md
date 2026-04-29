@@ -36,11 +36,11 @@ Web Screen Time Tracker 是一个 Microsoft Edge / Chromium Manifest V3 浏览�
 - Popup 快速查看今日状态。
 - Dashboard 展示 active share、open/active 对比、热力图和站点详情。
 - Records 查看访问记录、Summary JSON、模型状态和 token usage。
-- Settings 配置模型供应商、提示词、API 测试、忽略域名、WebDAV 和导出。
+- Settings 配置模型供应商、提示词、API 测试、忽略域名、本地归档、WebDAV 和导出。
 - Analysis 生成日/周/月行为报告，支持 Markdown 预览、Evidence、Trend 和 Frequent themes。
 - 通过 OpenAI-compatible chat completions API 自动生成页面摘要。
 - 对 DOM 文本抽取失败的 blocked 页面支持截图 fallback。
-- 支持按周 WebDAV 归档备份。
+- 支持本地归档 records 和 analysis reports，并可选镜像备份到 WebDAV。
 - 支持完整本地 JSON 导出。
 
 ## Active Usage 与 Open Context
@@ -145,19 +145,28 @@ analysis model 可以和 summary model 分开配置，因此可以用更便宜/�
 - API 测试会发送真实请求验证模型连通性。
 - Analysis 请求包含更多累计数据，比 summary 测试慢是正常现象。
 
-## WebDAV 备份
+## 本地归档与 WebDAV 备份
 
-WebDAV 备份按周归档，不会每次小变化都上传。
+本地归档是主要文件库。WebDAV 是可选远端镜像，配置后使用同一套目录结构备份一份。
 
-默认归档路径：
+默认本地归档路径在浏览器 Downloads 目录下：
 
 ```text
-browser-tracker/weeks/YYYY-Www.json
+Downloads/browser-tracker/
 ```
 
-每个周归档包含 daily stats、visit events、page summaries、analysis reports、timezone、schema version、export timestamp 和去敏后的 settings。
+归档结构：
 
-WebDAV 测试会执行真实的 `PUT`、`GET`、`DELETE` nonce 请求。
+```text
+browser-tracker/records/YYYY/MM/YYYY-MM-DD.json
+browser-tracker/analysis/YYYY/MM/YYYY-MM-DD_day_HHMMSS_reportid.md
+browser-tracker/analysis/YYYY/MM/YYYY-MM-DD_to_YYYY-MM-DD_week_HHMMSS_reportid.md
+browser-tracker/analysis/YYYY/MM/YYYY-MM-DD_to_YYYY-MM-DD_month_HHMMSS_reportid.md
+```
+
+每日记录文件包含 daily stats、visit events、page summaries、匹配的 analysis report 元数据、timezone、schema version、export timestamp 和去敏后的 settings。分析文件保存为 Markdown 报告。
+
+本地归档测试会写入一个很小的 nonce 文件。WebDAV 测试会执行真实的 `PUT`、`GET`、`DELETE` nonce 请求。
 
 ## 权限说明
 
@@ -184,7 +193,8 @@ WebDAV 测试会执行真实的 `PUT`、`GET`、`DELETE` nonce 请求。
 
 - 页面文本或截图证据会在摘要运行时发送给配置的 summary model。
 - 聚合统计、访问记录和页面摘要会在分析运行时发送给配置的 analysis model。
-- 周归档只会上传到用户配置的 WebDAV endpoint。
+- 本地归档文件会写入用户配置的归档目录，或浏览器 Downloads fallback。
+- 归档镜像只会上传到用户配置的 WebDAV endpoint。
 - JSON 导出可能包含私密浏览历史和页面摘要。
 
 API key 和 WebDAV 凭据保存在本地扩展存储中。导出的数据请视为私密数据处理。

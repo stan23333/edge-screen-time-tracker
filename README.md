@@ -36,11 +36,11 @@ More screenshots are available in [`docs/screenshots/`](docs/screenshots/).
 - Popup for quick daily awareness.
 - Dashboard for active share, open/active comparison, heatmaps, and per-site details.
 - Records page for browsing history, summary JSON, model status, and token usage.
-- Settings page for provider presets, prompts, API tests, ignored domains, WebDAV, and export.
+- Settings page for provider presets, prompts, API tests, ignored domains, local archive, WebDAV, and export.
 - Analysis page for day/week/month behavior reports with Markdown preview, evidence charts, trends, and frequent themes.
 - Automatic page summaries through OpenAI-compatible chat completion APIs.
 - Screenshot fallback for pages where DOM text capture is blocked.
-- Weekly WebDAV archive backup.
+- Local archive for records and analysis reports, with optional WebDAV mirror backup.
 - Full local JSON export.
 
 ## Active Usage vs Open Context
@@ -145,19 +145,28 @@ Notes:
 - API tests send real requests to verify model connectivity.
 - Analysis requests may take longer than summary tests because they include more accumulated data.
 
-## WebDAV Backup
+## Local Archive and WebDAV Backup
 
-WebDAV backup stores weekly archives instead of uploading after every small change.
+The local archive is the primary file library. WebDAV is an optional remote mirror that uses the same folder structure when configured.
 
-Default archive path:
+Default local archive path under the browser Downloads folder:
 
 ```text
-browser-tracker/weeks/YYYY-Www.json
+Downloads/browser-tracker/
 ```
 
-Weekly archives include daily stats, visit events, page summaries, analysis reports, timezone, schema version, export timestamp, and sanitized settings.
+Archive structure:
 
-The WebDAV test performs a real `PUT`, `GET`, and `DELETE` cycle with a nonce payload.
+```text
+browser-tracker/records/YYYY/MM/YYYY-MM-DD.json
+browser-tracker/analysis/YYYY/MM/YYYY-MM-DD_day_HHMMSS_reportid.md
+browser-tracker/analysis/YYYY/MM/YYYY-MM-DD_to_YYYY-MM-DD_week_HHMMSS_reportid.md
+browser-tracker/analysis/YYYY/MM/YYYY-MM-DD_to_YYYY-MM-DD_month_HHMMSS_reportid.md
+```
+
+Daily record files include daily stats, visit events, page summaries, matching analysis report metadata, timezone, schema version, export timestamp, and sanitized settings. Analysis files are Markdown reports.
+
+The local archive test writes a small nonce file. The WebDAV test performs a real `PUT`, `GET`, and `DELETE` cycle with a nonce payload.
 
 ## Permissions
 
@@ -184,7 +193,8 @@ External data transfer happens only when the user configures related features:
 
 - Page text or screenshot evidence is sent to the configured summary model when summarization runs.
 - Aggregated stats, visits, and summaries are sent to the configured analysis model when analysis runs.
-- Weekly archives are uploaded only to the user-configured WebDAV endpoint.
+- Local archive files are written under the configured archive folder or the browser Downloads fallback.
+- Archive mirrors are uploaded only to the user-configured WebDAV endpoint.
 - JSON exports can contain private browsing history and page summaries.
 
 API keys and WebDAV credentials are stored in local extension storage. Treat exported data as private.

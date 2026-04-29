@@ -7,6 +7,9 @@ const SCREENSHOT_FALLBACK_INTERVAL_MS = 10 * 60 * 1000;
 const MODEL_REQUEST_TIMEOUT_MS = 15 * 1000;
 const ANALYSIS_MODEL_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 const MIN_SUMMARY_TEXT_CHARS = 200;
+const LOCAL_ARCHIVE_DB = "web-screen-time-tracker-local-archive";
+const LOCAL_ARCHIVE_STORE = "handles";
+const LOCAL_ARCHIVE_HANDLE_KEY = "directory";
 const IGNORE_DOMAIN_MENU = "ignore-current-website";
 const METRICS = {
   ACTIVE: "activeSeconds",
@@ -937,6 +940,9 @@ function sanitizeSettings(settings) {
     webdav: {
       ...settings.webdav,
       password: settings.webdav.password ? "[configured]" : ""
+    },
+    localArchive: {
+      ...settings.localArchive
     }
   };
 }
@@ -2270,14 +2276,37 @@ async function runAnalysis(period, endDateKey) {
     analysisReports[period] = analysisReports[period] || [];
     analysisReports[period].unshift(report);
     await StorageUtils.setAnalysisReports(analysisReports);
+
+    const backup = {};
     try {
-      report.backup = await backupWeeksForDateKeys(keys);
+      const localAnalysis = await archiveAnalysisReportToLocal(report);
+      backup.local = localAnalysis;
+      report.backup = backup;
+      await StorageUtils.setAnalysisReports(analysisReports);
+      backup.records = {
+        ...(backup.records || {}),
+        local: await archiveDailyRecordsForDateKeys(keys)
+      };
     } catch (error) {
-      report.backup = {
-        skipped: false,
+      backup.local = {
+        status: "error",
+        error: error.message || "Local archive failed."
+      };
+    }
+    try {
+      const remoteAnalysis = await backupAnalysisReportToWebdav(report);
+      backup.remote = remoteAnalysis;
+      backup.records = {
+        ...(backup.records || {}),
+        remote: await backupDailyRecordsForDateKeys(keys)
+      };
+    } catch (error) {
+      backup.remote = {
+        status: "error",
         error: error.message || "WebDAV backup failed."
       };
     }
+    report.backup = backup;
     await StorageUtils.setAnalysisReports(analysisReports);
     setLastAnalysisStatus("done", `${period} analysis completed.`, {
       period,
@@ -2319,57 +2348,261 @@ function webdavBaseAndPath(settings) {
   };
 }
 
-function weeklyArchivePath(basePath, weekKey) {
-  const root = basePath && !/\.json$/i.test(basePath) ? basePath : "browser-tracker";
-  return `${root}/weeks/${weekKey}.json`;
+function datePartsFromKey(dateKey) {
+  const [year = "0000", month = "00"] = String(dateKey || "").split("-");
+  return { year, month };
 }
 
-function filterObjectByKeys(source, keys, fallback) {
-  return Object.fromEntries(keys.map((key) => [key, source?.[key] || fallback]));
+function timeKeyFromTimestamp(timestamp) {
+  const date = new Date(timestamp || Date.now());
+  return [
+    String(date.getHours()).padStart(2, "0"),
+    String(date.getMinutes()).padStart(2, "0"),
+    String(date.getSeconds()).padStart(2, "0")
+  ].join("");
 }
 
-function analysisReportsForWeek(reports, weekRange) {
-  const start = weekRange.startTs;
-  const end = weekRange.endTs;
-  const result = {};
+function localJoin(...parts) {
+  return parts
+    .filter((part) => String(part || "").trim())
+    .map((part, index) => {
+      const value = String(part);
+      if (index === 0) {
+        return value.replace(/[\\/]+$/g, "");
+      }
+      return value.replace(/^[\\/]+|[\\/]+$/g, "");
+    })
+    .join("/");
+}
 
-  for (const [period, items] of Object.entries(reports || {})) {
-    result[period] = (items || []).filter((report) => report.createdAt >= start && report.createdAt < end);
+function cleanArchiveFolderName(value) {
+  return String(value || "browser-tracker")
+    .replace(/^\/+|\/+$/g, "")
+    .replace(/\.\./g, "")
+    .trim() || "browser-tracker";
+}
+
+function localArchiveRoot(settings) {
+  return cleanArchiveFolderName(settings.localArchive?.downloadsFolder);
+}
+
+function openLocalArchiveDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(LOCAL_ARCHIVE_DB, 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(LOCAL_ARCHIVE_STORE)) {
+        request.result.createObjectStore(LOCAL_ARCHIVE_STORE);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function getDirectoryHandle() {
+  const db = await openLocalArchiveDb();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(LOCAL_ARCHIVE_STORE, "readonly");
+    const request = transaction.objectStore(LOCAL_ARCHIVE_STORE).get(LOCAL_ARCHIVE_HANDLE_KEY);
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function archiveFolderPath(displayRoot, relativePath) {
+  return localJoin(displayRoot, relativePath.split("/").slice(0, -1).join("/"));
+}
+
+function archiveResult(settings, mode, relativePath, backedUpAt = Date.now(), extra = {}) {
+  const root = mode === "directory"
+    ? settings.localArchive?.directoryName || "Selected folder"
+    : `Downloads/${localArchiveRoot(settings)}`;
+  return {
+    status: extra.status || "done",
+    mode,
+    backedUpAt,
+    relativePath,
+    displayPath: localJoin(root, relativePath),
+    folderPath: archiveFolderPath(root, relativePath),
+    ...extra
+  };
+}
+
+function dataUrlForText(text, contentType) {
+  return `data:${contentType};charset=utf-8,${encodeURIComponent(text)}`;
+}
+
+async function writeDownloadArchiveFile(settings, relativePath, text, contentType) {
+  const filename = localJoin(localArchiveRoot(settings), relativePath);
+  const downloadId = await chrome.downloads.download({
+    url: dataUrlForText(text, contentType),
+    filename,
+    conflictAction: "overwrite",
+    saveAs: false
+  });
+  return archiveResult(settings, "downloads", relativePath, Date.now(), { downloadId });
+}
+
+async function writeFileToDirectory(rootHandle, relativePath, text) {
+  const parts = relativePath.split("/").filter(Boolean);
+  const fileName = parts.pop();
+  let directory = rootHandle;
+
+  for (const part of parts) {
+    directory = await directory.getDirectoryHandle(part, { create: true });
   }
 
+  const fileHandle = await directory.getFileHandle(fileName, { create: true });
+  const writable = await fileHandle.createWritable();
+  await writable.write(text);
+  await writable.close();
+}
+
+async function writeDirectoryArchiveFile(settings, relativePath, text) {
+  const handle = await getDirectoryHandle();
+  if (!handle) {
+    throw new Error("Local archive folder is not available.");
+  }
+
+  const permission = await handle.queryPermission?.({ mode: "readwrite" });
+  if (permission && permission !== "granted") {
+    throw new Error("Local archive folder permission is not granted.");
+  }
+
+  await writeFileToDirectory(handle, relativePath, text);
+  return archiveResult(settings, "directory", relativePath);
+}
+
+async function writeLocalArchiveFile(relativePath, text, contentType) {
+  const settings = await StorageUtils.getSettings();
+  if (settings.localArchive?.mode === "directory") {
+    try {
+      return await writeDirectoryArchiveFile(settings, relativePath, text, contentType);
+    } catch (error) {
+      const fallback = await writeDownloadArchiveFile(settings, relativePath, text, contentType);
+      return {
+        ...fallback,
+        status: "fallback",
+        fallbackReason: error.message || "Directory archive failed."
+      };
+    }
+  }
+
+  return writeDownloadArchiveFile(settings, relativePath, text, contentType);
+}
+
+async function writeLocalArchiveJson(relativePath, payload) {
+  return writeLocalArchiveFile(relativePath, JSON.stringify(payload, null, 2), "application/json");
+}
+
+async function writeLocalArchiveText(relativePath, text, contentType = "text/markdown") {
+  return writeLocalArchiveFile(relativePath, text, contentType);
+}
+
+function dailyRecordRelativePath(dateKey) {
+  const { year, month } = datePartsFromKey(dateKey);
+  return `records/${year}/${month}/${dateKey}.json`;
+}
+
+function analysisReportRelativePath(report) {
+  const { year, month } = datePartsFromKey(report.endDate);
+  const id = String(report.id || "").replace(/[^a-z0-9-]/gi, "").slice(0, 8) || "report";
+  const timeKey = timeKeyFromTimestamp(report.createdAt);
+  const datePart = report.startDate === report.endDate
+    ? report.endDate
+    : `${report.startDate}_to_${report.endDate}`;
+  return `analysis/${year}/${month}/${datePart}_${report.period}_${timeKey}_${id}.md`;
+}
+
+function remoteBackupLocation(settings, relativePath, backedUpAt = Date.now()) {
+  const { baseUrl, basePath } = webdavBaseAndPath(settings);
+  const remotePath = localJoin(basePath || "browser-tracker", relativePath);
+  return {
+    status: "done",
+    backedUpAt,
+    remotePath,
+    remoteUrl: `${baseUrl}/${remotePath}`,
+    relativePath
+  };
+}
+
+function compactAnalysisReportsForDate(reports, dateKey) {
+  const result = {};
+  for (const [period, items] of Object.entries(reports || {})) {
+    const matches = (items || [])
+      .filter((report) => report.endDate === dateKey || TimeUtils.dateKeyFromTimestamp(report.createdAt) === dateKey)
+      .map((report) => ({
+        id: report.id,
+        createdAt: report.createdAt,
+        period: report.period,
+        startDate: report.startDate,
+        endDate: report.endDate,
+        model: report.model,
+        usage: report.usage || null,
+        backup: report.backup || null
+      }));
+    if (matches.length) {
+      result[period] = matches;
+    }
+  }
   return result;
 }
 
-async function buildWeeklyArchive(weekKey, rangeTimestamp = Date.now()) {
+async function collectBackupStores() {
   await checkpointActiveSession();
   await syncOpenSessionsWithTabs();
   await checkpointOpenSessions();
-  const dailyStats = await rebuildAndStoreDailyStats();
-  const visitEvents = await StorageUtils.getVisitEvents();
-  const pageSummaries = await StorageUtils.getPageSummaries();
-  const analysisReports = await StorageUtils.getAnalysisReports();
-  const settings = await StorageUtils.getSettings();
-  const range = TimeUtils.weekRangeFromTimestamp(rangeTimestamp);
-  const weekDates = [];
+  return {
+    dailyStats: await rebuildAndStoreDailyStats(),
+    visitEvents: await StorageUtils.getVisitEvents(),
+    pageSummaries: await StorageUtils.getPageSummaries(),
+    analysisReports: await StorageUtils.getAnalysisReports(),
+    settings: await StorageUtils.getSettings()
+  };
+}
 
-  for (let cursor = range.startTs; cursor < range.endTs; cursor += 24 * 60 * 60 * 1000) {
-    weekDates.push(TimeUtils.dateKeyFromTimestamp(cursor));
-  }
+async function buildDailyRecordArchive(dateKey, stores = null) {
+  const data = stores || await collectBackupStores();
 
   return {
     exportedAt: Date.now(),
-    schemaVersion: 2,
-    archiveType: "weekly",
+    schemaVersion: 3,
+    archiveType: "daily_record",
     timezone: TimeUtils.systemTimeZone(),
-    weekKey,
-    startDate: range.startDate,
-    endDate: range.endDate,
-    dailyStats: filterObjectByKeys(dailyStats, weekDates, {}),
-    visitEvents: filterObjectByKeys(visitEvents, weekDates, []),
-    pageSummaries: filterObjectByKeys(pageSummaries, weekDates, []),
-    analysisReports: analysisReportsForWeek(analysisReports, range),
-    settings: sanitizeSettings(settings)
+    date: dateKey,
+    dailyStats: data.dailyStats[dateKey] || {},
+    visitEvents: data.visitEvents[dateKey] || [],
+    pageSummaries: data.pageSummaries[dateKey] || [],
+    analysisReports: compactAnalysisReportsForDate(data.analysisReports, dateKey),
+    settings: sanitizeSettings(data.settings)
   };
+}
+
+function buildAnalysisMarkdown(report, backup = null) {
+  const usage = report.usage?.total_tokens
+    ? `${report.usage.total_tokens} tokens`
+    : "not reported";
+  const localPath = backup?.local?.displayPath || backup?.displayPath || "";
+  const remotePath = backup?.remote?.remotePath || backup?.remotePath || "";
+  return [
+    "---",
+    `id: ${report.id}`,
+    `period: ${report.period}`,
+    `startDate: ${report.startDate}`,
+    `endDate: ${report.endDate}`,
+    `createdAt: ${new Date(report.createdAt).toISOString()}`,
+    `model: ${report.model || ""}`,
+    `usage: ${usage}`,
+    localPath ? `localPath: ${localPath}` : "",
+    remotePath ? `remotePath: ${remotePath}` : "",
+    "---",
+    "",
+    `# ${report.period[0].toUpperCase()}${report.period.slice(1)} Analysis`,
+    "",
+    `Date range: ${report.startDate} to ${report.endDate}`,
+    "",
+    report.report || ""
+  ].filter((line) => line !== "").join("\n");
 }
 
 async function putWebdavJson(path, payload) {
@@ -2386,6 +2619,32 @@ async function putWebdavJson(path, payload) {
     method: "PUT",
     headers,
     body: JSON.stringify(payload, null, 2)
+  });
+
+  if (!response.ok) {
+    throw new Error(`WebDAV backup failed: ${response.status} ${response.statusText}`);
+  }
+
+  return {
+    backedUpAt: Date.now(),
+    path: `${baseUrl}/${path}`
+  };
+}
+
+async function putWebdavText(path, text, contentType = "text/markdown; charset=utf-8") {
+  const settings = await StorageUtils.getSettings();
+  if (!settings.webdav.url) {
+    throw new Error("WebDAV URL is required.");
+  }
+
+  const { baseUrl } = webdavBaseAndPath(settings);
+  const headers = webdavHeaders(settings, contentType);
+  await ensureWebdavDirectories(baseUrl, path, settings);
+
+  const response = await fetch(`${baseUrl}/${path}`, {
+    method: "PUT",
+    headers,
+    body: text
   });
 
   if (!response.ok) {
@@ -2416,34 +2675,145 @@ async function ensureWebdavDirectories(baseUrl, path, settings) {
   }
 }
 
-async function backupWeekToWebdav(weekKey, rangeTimestamp = Date.now()) {
-  const settings = await StorageUtils.getSettings();
-  const { basePath } = webdavBaseAndPath(settings);
-  const path = weeklyArchivePath(basePath, weekKey);
-  return putWebdavJson(path, await buildWeeklyArchive(weekKey, rangeTimestamp));
-}
-
-async function backupWeeksForDateKeys(dateKeys) {
+async function backupDailyRecordToWebdav(dateKey, stores = null) {
   const settings = await StorageUtils.getSettings();
   if (!settings.webdav.url) {
-    return { skipped: true, reason: "WebDAV URL is not configured." };
+    return { skipped: true, reason: "WebDAV URL is not configured.", dateKey };
   }
 
-  const weekMap = new Map();
-  for (const dateKey of dateKeys || []) {
-    const timestamp = new Date(`${dateKey}T00:00:00`).getTime();
-    weekMap.set(TimeUtils.weekKeyFromTimestamp(timestamp), timestamp);
-  }
+  const { basePath } = webdavBaseAndPath(settings);
+  const relativePath = dailyRecordRelativePath(dateKey);
+  const remotePath = localJoin(basePath || "browser-tracker", relativePath);
+  const result = await putWebdavJson(remotePath, await buildDailyRecordArchive(dateKey, stores));
+  return {
+    ...remoteBackupLocation(settings, relativePath, result.backedUpAt),
+    dateKey
+  };
+}
+
+async function archiveDailyRecordToLocal(dateKey, stores = null) {
+  const relativePath = dailyRecordRelativePath(dateKey);
+  return {
+    ...await writeLocalArchiveJson(relativePath, await buildDailyRecordArchive(dateKey, stores)),
+    dateKey
+  };
+}
+
+async function archiveDailyRecordsForDateKeys(dateKeys) {
   const results = [];
-  for (const [weekKey, timestamp] of weekMap.entries()) {
-    results.push(await backupWeekToWebdav(weekKey, timestamp));
+  const stores = await collectBackupStores();
+  for (const dateKey of [...new Set(dateKeys || [])]) {
+    results.push(await archiveDailyRecordToLocal(dateKey, stores));
   }
   return { skipped: false, results };
 }
 
+async function backupDailyRecordsForDateKeys(dateKeys) {
+  const settings = await StorageUtils.getSettings();
+  if (!settings.webdav.url) {
+    return { skipped: true, reason: "WebDAV URL is not configured.", results: [] };
+  }
+
+  const results = [];
+  const stores = await collectBackupStores();
+  for (const dateKey of [...new Set(dateKeys || [])]) {
+    results.push(await backupDailyRecordToWebdav(dateKey, stores));
+  }
+  return { skipped: false, results };
+}
+
+async function backupAnalysisReportToWebdav(report) {
+  const settings = await StorageUtils.getSettings();
+  if (!settings.webdav.url) {
+    return { status: "skipped", skipped: true, reason: "WebDAV URL is not configured." };
+  }
+
+  const { basePath } = webdavBaseAndPath(settings);
+  const relativePath = analysisReportRelativePath(report);
+  const location = remoteBackupLocation(settings, relativePath);
+  const remotePath = localJoin(basePath || "browser-tracker", relativePath);
+  const result = await putWebdavText(remotePath, buildAnalysisMarkdown(report, location));
+  return remoteBackupLocation(settings, relativePath, result.backedUpAt);
+}
+
+async function archiveAnalysisReportToLocal(report) {
+  const relativePath = analysisReportRelativePath(report);
+  return writeLocalArchiveText(relativePath, buildAnalysisMarkdown(report), "text/markdown");
+}
+
+function reportsForDateKeys(reports, dateKeys) {
+  const allowed = new Set(dateKeys || []);
+  return Object.values(reports || {})
+    .flat()
+    .filter((report) => allowed.has(report.endDate) || allowed.has(TimeUtils.dateKeyFromTimestamp(report.createdAt)));
+}
+
 async function backupToWebdav() {
-  const weekKey = TimeUtils.weekKeyFromTimestamp(Date.now());
-  return backupWeekToWebdav(weekKey);
+  const range = TimeUtils.weekRangeFromTimestamp(Date.now());
+  const dateKeys = [];
+  for (let cursor = range.startTs; cursor < range.endTs; cursor += 24 * 60 * 60 * 1000) {
+    dateKeys.push(TimeUtils.dateKeyFromTimestamp(cursor));
+  }
+
+  const local = {};
+  const remote = {};
+  try {
+    local.records = await archiveDailyRecordsForDateKeys(dateKeys);
+  } catch (error) {
+    local.records = { status: "error", error: error.message || "Local archive failed.", results: [] };
+  }
+  try {
+    remote.records = await backupDailyRecordsForDateKeys(dateKeys);
+  } catch (error) {
+    remote.records = { status: "error", error: error.message || "WebDAV backup failed.", results: [] };
+  }
+
+  const analysisReports = await StorageUtils.getAnalysisReports();
+  local.analysis = [];
+  remote.analysis = [];
+  for (const report of reportsForDateKeys(analysisReports, dateKeys)) {
+    report.backup = report.backup || {};
+    try {
+      report.backup.local = await archiveAnalysisReportToLocal(report);
+      local.analysis.push(report.backup.local);
+    } catch (error) {
+      report.backup.local = { status: "error", error: error.message || "Local archive failed." };
+      local.analysis.push(report.backup.local);
+    }
+    try {
+      report.backup.remote = await backupAnalysisReportToWebdav(report);
+      remote.analysis.push(report.backup.remote);
+    } catch (error) {
+      report.backup.remote = { status: "error", error: error.message || "WebDAV backup failed." };
+      remote.analysis.push(report.backup.remote);
+    }
+  }
+  await StorageUtils.setAnalysisReports(analysisReports);
+
+  return {
+    backedUpAt: Date.now(),
+    local,
+    remote,
+    records: remote.records,
+    analysis: remote.analysis
+  };
+}
+
+async function testLocalArchive() {
+  const result = await writeLocalArchiveJson(`system/test-local-archive-${Date.now()}.json`, {
+    ok: true,
+    testedAt: Date.now(),
+    nonce: crypto.randomUUID()
+  });
+  return { ok: true, ...result };
+}
+
+async function openLocalArchiveDownload(downloadId) {
+  if (!Number.isInteger(downloadId)) {
+    throw new Error("This local archive item cannot be opened directly. Copy the local path instead.");
+  }
+  await chrome.downloads.show(downloadId);
+  return { ok: true };
 }
 
 async function testModel(target) {
@@ -2506,15 +2876,15 @@ async function testWebdav() {
     throw new Error("WebDAV URL is required.");
   }
 
-  const headers = {};
-  if (settings.webdav.username || settings.webdav.password) {
-    headers.Authorization = `Basic ${btoa(`${settings.webdav.username}:${settings.webdav.password}`)}`;
-  }
-
-  const baseUrl = settings.webdav.url.replace(/\/+$/, "");
-  const testUrl = `${baseUrl}/browser-tracker-test-${Date.now()}.json`;
+  const { baseUrl, basePath } = webdavBaseAndPath(settings);
+  const testPath = `${basePath || "browser-tracker"}/browser-tracker-test-${Date.now()}.json`;
+  const testUrl = `${baseUrl}/${testPath}`;
+  const headers = webdavHeaders(settings);
   const nonce = crypto.randomUUID();
   const payload = { ok: true, nonce, testedAt: Date.now() };
+
+  await ensureWebdavDirectories(baseUrl, testPath, settings);
+
   const putResponse = await fetch(testUrl, {
     method: "PUT",
     headers: {
@@ -2552,6 +2922,7 @@ async function testWebdav() {
 
   return {
     ok: true,
+    path: testPath,
     status: getResponse.status
   };
 }
@@ -2740,7 +3111,7 @@ chrome.idle.onStateChanged.addListener(async (idleState) => {
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (["GET_SETTINGS", "SAVE_SETTINGS", "TEST_MODEL", "TEST_WEBDAV", "RUN_ANALYSIS", "GET_ANALYSIS_DATA"].includes(message?.type)) {
+  if (["GET_SETTINGS", "SAVE_SETTINGS", "TEST_MODEL", "TEST_LOCAL_ARCHIVE", "OPEN_LOCAL_ARCHIVE", "TEST_WEBDAV", "RUN_ANALYSIS", "GET_ANALYSIS_DATA"].includes(message?.type)) {
     (async () => {
       if (message.type === "GET_SETTINGS") {
         sendResponse(await StorageUtils.getSettings());
@@ -2760,6 +3131,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       if (message.type === "TEST_WEBDAV") {
         sendResponse(await testWebdav());
+        return;
+      }
+
+      if (message.type === "TEST_LOCAL_ARCHIVE") {
+        sendResponse(await testLocalArchive());
+        return;
+      }
+
+      if (message.type === "OPEN_LOCAL_ARCHIVE") {
+        sendResponse(await openLocalArchiveDownload(message.downloadId));
         return;
       }
 
@@ -2830,6 +3211,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     if (message?.type === "TEST_WEBDAV") {
       sendResponse(await testWebdav());
+      return;
+    }
+
+    if (message?.type === "TEST_LOCAL_ARCHIVE") {
+      sendResponse(await testLocalArchive());
+      return;
+    }
+
+    if (message?.type === "OPEN_LOCAL_ARCHIVE") {
+      sendResponse(await openLocalArchiveDownload(message.downloadId));
       return;
     }
 

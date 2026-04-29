@@ -29,6 +29,7 @@ const dailyTrendEl = document.getElementById("dailyTrend");
 const captureMixEl = document.getElementById("captureMix");
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const TREND_DAYS = 14;
 let snapshot = null;
 let rangeDays = 1;
 let selectedDomain = null;
@@ -57,6 +58,15 @@ function rangeKeys() {
   const end = endDateEl.value ? keyToDate(endDateEl.value) : new Date();
   const keys = [];
   for (let index = rangeDays - 1; index >= 0; index -= 1) {
+    keys.push(dateToKey(new Date(end.getTime() - index * DAY_MS)));
+  }
+  return keys;
+}
+
+function trendKeys() {
+  const end = endDateEl.value ? keyToDate(endDateEl.value) : new Date();
+  const keys = [];
+  for (let index = TREND_DAYS - 1; index >= 0; index -= 1) {
     keys.push(dateToKey(new Date(end.getTime() - index * DAY_MS)));
   }
   return keys;
@@ -426,7 +436,7 @@ function render() {
 
   renderMetrics(rows, summaries, reports);
   renderBars(rows);
-  renderDailyTrend(keys);
+  renderDailyTrend(trendKeys());
   renderMixBars(summaries);
   renderVisits(visits);
 

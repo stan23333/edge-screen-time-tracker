@@ -6,9 +6,12 @@ const exportDataEl = document.getElementById("exportData");
 const testSummaryModelEl = document.getElementById("testSummaryModel");
 const testAnalysisModelEl = document.getElementById("testAnalysisModel");
 const testWebdavEl = document.getElementById("testWebdav");
+const chooseLocalArchiveFolderEl = document.getElementById("chooseLocalArchiveFolder");
+const testLocalArchiveEl = document.getElementById("testLocalArchive");
 const summaryTestLightEl = document.getElementById("summaryTestLight");
 const analysisTestLightEl = document.getElementById("analysisTestLight");
 const webdavTestLightEl = document.getElementById("webdavTestLight");
+const localArchiveStatusEl = document.getElementById("localArchiveStatus");
 
 const fields = {
   summaryProvider: document.getElementById("summaryProvider"),
@@ -29,6 +32,7 @@ const fields = {
   screenshotAuthorizedDomains: document.getElementById("screenshotAuthorizedDomains"),
   screenshotPromptedDomains: document.getElementById("screenshotPromptedDomains"),
   ignoredDomains: document.getElementById("ignoredDomains"),
+  localArchiveDownloadsFolder: document.getElementById("localArchiveDownloadsFolder"),
   webdavUrl: document.getElementById("webdavUrl"),
   webdavUsername: document.getElementById("webdavUsername"),
   webdavPassword: document.getElementById("webdavPassword"),
@@ -43,6 +47,33 @@ const PROVIDER_BASE_URLS = {
   siliconflow: "https://api.siliconflow.cn/v1",
   ollama: "http://localhost:11434/v1"
 };
+
+const LOCAL_ARCHIVE_DB = "web-screen-time-tracker-local-archive";
+const LOCAL_ARCHIVE_STORE = "handles";
+const LOCAL_ARCHIVE_HANDLE_KEY = "directory";
+
+function openLocalArchiveDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(LOCAL_ARCHIVE_DB, 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(LOCAL_ARCHIVE_STORE)) {
+        request.result.createObjectStore(LOCAL_ARCHIVE_STORE);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function setDirectoryHandle(handle) {
+  const db = await openLocalArchiveDb();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(LOCAL_ARCHIVE_STORE, "readwrite");
+    transaction.objectStore(LOCAL_ARCHIVE_STORE).put(handle, LOCAL_ARCHIVE_HANDLE_KEY);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+  });
+}
 
 function endpointFromBaseUrl(baseUrl) {
   const normalized = String(baseUrl || "").trim().replace(/\/+$/, "");
@@ -96,6 +127,10 @@ function fillForm(settings) {
   fields.screenshotAuthorizedDomains.value = (settings.capture.screenshotAuthorizedDomains || []).join("\n");
   fields.screenshotPromptedDomains.value = Object.keys(settings.capture.screenshotPromptedDomains || {}).sort().join("\n");
   fields.ignoredDomains.value = (settings.ignoredDomains || []).join("\n");
+  fields.localArchiveDownloadsFolder.value = settings.localArchive?.downloadsFolder || "browser-tracker";
+  localArchiveStatusEl.textContent = settings.localArchive?.mode === "directory"
+    ? `Folder: ${settings.localArchive.directoryName || "selected"}`
+    : "Downloads fallback";
   fields.webdavUrl.value = settings.webdav.url;
   fields.webdavUsername.value = settings.webdav.username;
   fields.webdavPassword.value = settings.webdav.password;
@@ -139,6 +174,10 @@ function readForm() {
       .split(/\n|,/)
       .map((domain) => domain.trim())
       .filter(Boolean),
+    localArchive: {
+      ...(currentSettings?.localArchive || {}),
+      downloadsFolder: fields.localArchiveDownloadsFolder.value.trim() || "browser-tracker"
+    },
     webdav: {
       url: fields.webdavUrl.value.trim(),
       username: fields.webdavUsername.value.trim(),
@@ -199,12 +238,17 @@ fields.autoSummarize.addEventListener("change", async () => {
 });
 
 backupNowEl.addEventListener("click", async () => {
-  setStatus("Backing up to WebDAV...");
+  setStatus("Archiving locally and backing up to WebDAV...");
   try {
     const result = await sendMessage({ type: "BACKUP_WEBDAV" });
-    setStatus(`Backup completed: ${new Date(result.backedUpAt).toLocaleString()}`);
+    const localRecordCount = result.local?.records?.results?.length || 0;
+    const localAnalysisCount = result.local?.analysis?.length || 0;
+    const remoteRecordCount = result.remote?.records?.results?.length || 0;
+    const remoteAnalysisCount = result.remote?.analysis?.length || 0;
+    const remoteNote = result.remote?.records?.skipped ? " WebDAV is not configured." : "";
+    setStatus(`Archive completed: ${localRecordCount} local record files, ${localAnalysisCount} local analysis files; ${remoteRecordCount} remote record files, ${remoteAnalysisCount} remote analysis files.${remoteNote}`);
   } catch (error) {
-    setStatus(error.message || "Backup failed.");
+    setStatus(error.message || "Archive failed.");
   }
 });
 
@@ -227,7 +271,9 @@ bindProviderSelect(fields.summaryProvider, fields.summaryBaseUrl);
 bindProviderSelect(fields.analysisProvider, fields.analysisBaseUrl);
 
 async function saveBeforeTest() {
-  return sendMessage({ type: "SAVE_SETTINGS", settings: readForm() });
+  const settings = await sendMessage({ type: "SAVE_SETTINGS", settings: readForm() });
+  fillForm(settings);
+  return settings;
 }
 
 async function runButtonTask(button, pendingMessage, task) {
@@ -266,6 +312,48 @@ testAnalysisModelEl.addEventListener("click", async () => {
   }).catch((error) => {
     setLight(analysisTestLightEl, "fail");
     setStatus(error.message || "Analysis model test failed.");
+  });
+});
+
+chooseLocalArchiveFolderEl.addEventListener("click", async () => {
+  if (!window.showDirectoryPicker) {
+    setStatus("Folder selection is not supported here. The extension will use the Downloads fallback.");
+    localArchiveStatusEl.textContent = "Downloads fallback";
+    return;
+  }
+
+  try {
+    const handle = await window.showDirectoryPicker({ mode: "readwrite" });
+    const permission = await handle.requestPermission?.({ mode: "readwrite" });
+    if (permission && permission !== "granted") {
+      throw new Error("Folder permission was not granted.");
+    }
+    await setDirectoryHandle(handle);
+    const settings = readForm();
+    settings.localArchive = {
+      ...settings.localArchive,
+      mode: "directory",
+      directoryName: handle.name || "Selected folder",
+      directoryGrantedAt: Date.now()
+    };
+    fillForm(await sendMessage({ type: "SAVE_SETTINGS", settings }));
+    setStatus(`Local archive folder selected: ${handle.name || "Selected folder"}.`);
+  } catch (error) {
+    setStatus(error.message || "Failed to select local archive folder.");
+  }
+});
+
+testLocalArchiveEl.addEventListener("click", async () => {
+  await runButtonTask(testLocalArchiveEl, "Testing local archive...", async () => {
+    await saveBeforeTest();
+    const result = await sendMessage({ type: "TEST_LOCAL_ARCHIVE" });
+    localArchiveStatusEl.textContent = result.mode === "directory"
+      ? `Folder: ${currentSettings?.localArchive?.directoryName || "selected"}`
+      : "Downloads fallback";
+    const fallbackNote = result.status === "fallback" ? ` Fallback reason: ${result.fallbackReason}` : "";
+    setStatus(`Local archive test passed: ${result.displayPath || result.relativePath}.${fallbackNote}`);
+  }).catch((error) => {
+    setStatus(error.message || "Local archive test failed.");
   });
 });
 

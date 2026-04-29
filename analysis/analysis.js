@@ -4,6 +4,7 @@ const reportMetaEl = document.getElementById("reportMeta");
 const reportTitleEl = document.getElementById("reportTitle");
 const reportBodyEl = document.getElementById("reportBody");
 const reportUsageEl = document.getElementById("reportUsage");
+const reportBackupEl = document.getElementById("reportBackup");
 const reportCountEl = document.getElementById("reportCount");
 const summaryCountEl = document.getElementById("summaryCount");
 const tokenCountEl = document.getElementById("tokenCount");
@@ -41,12 +42,117 @@ function renderReport(report) {
   reportMetaEl.textContent = `${report.period} | ${report.startDate} to ${report.endDate} | ${new Date(report.createdAt).toLocaleString()}`;
   reportTitleEl.textContent = `${report.period[0].toUpperCase()}${report.period.slice(1)} Analysis`;
   renderMarkdown(reportBodyEl, report.report);
+  renderBackupInfo(report);
   reportUsageEl.textContent = report.usage?.total_tokens
     ? `${report.usage.total_tokens.toLocaleString()} tokens`
     : "Tokens not reported";
   document.querySelectorAll(".reportItem").forEach((item) => {
     item.classList.toggle("active", item.dataset.reportId === report.id);
   });
+}
+
+async function copyText(text) {
+  await navigator.clipboard.writeText(text);
+}
+
+function backupStatusText(backup) {
+  if (!backup) {
+    return "Archive path appears after a report is generated.";
+  }
+  const local = backup.local || backup;
+  if (local.status === "error" || local.error) {
+    return `Local archive failed: ${local.error || "Unknown error"}`;
+  }
+  return "";
+}
+
+function renderBackupInfo(report) {
+  const backup = report.backup || null;
+  reportBackupEl.textContent = "";
+  const status = backupStatusText(backup);
+  if (status) {
+    reportBackupEl.textContent = status;
+    return;
+  }
+
+  const localInfo = backup?.local || backup || {};
+  const remoteInfo = backup?.remote || {};
+  const remote = document.createElement("p");
+  const local = document.createElement("p");
+  const actions = document.createElement("div");
+  const openLocal = document.createElement("button");
+  const openRemote = document.createElement("button");
+  const copyLocal = document.createElement("button");
+  const copyFolder = document.createElement("button");
+
+  local.textContent = localInfo.displayPath
+    ? `Local: ${localInfo.displayPath}`
+    : "Local: Not archived yet.";
+  if (remoteInfo.remotePath) {
+    remote.textContent = `Remote: ${remoteInfo.remotePath}`;
+  } else if (remoteInfo.status === "error" || remoteInfo.error) {
+    remote.textContent = `Remote: ${remoteInfo.error || "WebDAV backup failed."}`;
+  } else if (remoteInfo.skipped || remoteInfo.status === "skipped") {
+    remote.textContent = `Remote: ${remoteInfo.reason || "WebDAV is not configured."}`;
+  } else {
+    remote.textContent = "Remote: Not backed up yet.";
+  }
+  actions.className = "backupActions";
+
+  openLocal.type = "button";
+  openLocal.className = "secondary";
+  openLocal.textContent = "Open Local";
+  openLocal.disabled = !Number.isInteger(localInfo.downloadId);
+  openLocal.addEventListener("click", async () => {
+    if (!Number.isInteger(localInfo.downloadId)) {
+      return;
+    }
+    try {
+      await sendMessage({ type: "OPEN_LOCAL_ARCHIVE", downloadId: localInfo.downloadId });
+    } catch (error) {
+      openLocal.textContent = error.message || "Cannot open";
+      setTimeout(() => {
+        openLocal.textContent = "Open Local";
+      }, 1600);
+    }
+  });
+
+  openRemote.type = "button";
+  openRemote.className = "secondary";
+  openRemote.textContent = "Open Remote";
+  openRemote.disabled = !remoteInfo.remoteUrl;
+  openRemote.addEventListener("click", () => {
+    if (remoteInfo.remoteUrl) {
+      window.open(remoteInfo.remoteUrl, "_blank", "noopener");
+    }
+  });
+
+  copyLocal.type = "button";
+  copyLocal.className = "secondary";
+  copyLocal.textContent = "Copy Local Path";
+  copyLocal.disabled = !localInfo.displayPath;
+  copyLocal.addEventListener("click", async () => {
+    await copyText(localInfo.displayPath);
+    copyLocal.textContent = "Copied";
+    setTimeout(() => {
+      copyLocal.textContent = "Copy Local Path";
+    }, 1200);
+  });
+
+  copyFolder.type = "button";
+  copyFolder.className = "secondary";
+  copyFolder.textContent = "Copy Folder Path";
+  copyFolder.disabled = !localInfo.folderPath;
+  copyFolder.addEventListener("click", async () => {
+    await copyText(localInfo.folderPath);
+    copyFolder.textContent = "Copied";
+    setTimeout(() => {
+      copyFolder.textContent = "Copy Folder Path";
+    }, 1200);
+  });
+
+  actions.append(openLocal, copyLocal, copyFolder, openRemote);
+  reportBackupEl.append(remote, local, actions);
 }
 
 function appendInlineMarkdown(parent, text) {
@@ -335,7 +441,9 @@ function renderList() {
     button.dataset.reportId = report.id;
     title.textContent = `${report.period}: ${report.startDate} - ${report.endDate}`;
     meta.textContent = `${new Date(report.createdAt).toLocaleString()}${report.usage?.total_tokens ? ` | ${report.usage.total_tokens.toLocaleString()} tokens` : ""}`;
-    preview.textContent = String(report.report || "").replace(/\s+/g, " ").slice(0, 110);
+    preview.textContent = report.backup?.local?.relativePath || report.backup?.local?.displayPath || report.backup?.remote?.remotePath
+      ? report.backup.local?.relativePath || report.backup.local?.displayPath || report.backup.remote?.remotePath
+      : String(report.report || "").replace(/\s+/g, " ").slice(0, 110);
     button.append(title, meta, preview);
     button.addEventListener("click", () => renderReport(report));
     reportListEl.append(button);
@@ -404,6 +512,7 @@ document.querySelectorAll("[data-period]").forEach((button) => {
     reportTitleEl.textContent = `${period[0].toUpperCase()}${period.slice(1)} Analysis`;
     reportMetaEl.textContent = "Running...";
     reportUsageEl.textContent = "Waiting for model";
+    reportBackupEl.textContent = "Archive path appears after generation succeeds.";
     renderMarkdown(reportBodyEl, `Generating ${period} analysis.\n\nLarge date ranges can take a few minutes.`);
     try {
       const report = await sendMessage({
@@ -433,6 +542,7 @@ document.querySelectorAll("[data-period]").forEach((button) => {
         reason: error.message || "Analysis failed.",
         finishedAt: Date.now()
       };
+      reportBackupEl.textContent = "No backup path for failed analysis.";
       renderMarkdown(reportBodyEl, error.message || "Analysis failed.");
       renderAnalysisStatus();
     } finally {

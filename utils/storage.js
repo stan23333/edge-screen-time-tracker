@@ -34,6 +34,12 @@
       password: "",
       backupPath: "browser-tracker"
     },
+    localArchive: {
+      mode: "downloads",
+      downloadsFolder: "browser-tracker",
+      directoryName: "",
+      directoryGrantedAt: 0
+    },
     capture: {
       autoSummarize: true,
       autoSummarizeTouched: false,
@@ -86,6 +92,15 @@
       webdav: {
         ...DEFAULT_SETTINGS.webdav,
         ...(settings?.webdav || {})
+      },
+      localArchive: {
+        ...DEFAULT_SETTINGS.localArchive,
+        ...(settings?.localArchive || {}),
+        mode: settings?.localArchive?.mode === "directory" ? "directory" : "downloads",
+        downloadsFolder: String(settings?.localArchive?.downloadsFolder || DEFAULT_SETTINGS.localArchive.downloadsFolder)
+          .replace(/^\/+|\/+$/g, "")
+          .replace(/\.\./g, "")
+          .trim() || DEFAULT_SETTINGS.localArchive.downloadsFolder
       },
       capture: {
         ...DEFAULT_SETTINGS.capture,

@@ -410,6 +410,44 @@ input {
   min-width: 0;
 }
 
+.backupBox {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+  border: 1px solid #dbe3ef;
+  border-radius: 10px;
+  padding: 12px;
+  background: #ffffff;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.backupBox p {
+  margin: 0;
+}
+
+.backupActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.backupActions button {
+  min-height: 32px;
+  border-color: var(--line);
+  padding: 0 10px;
+  background: #fbfcff;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.backupActions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
 .markdownBody {
   overflow: auto;
   min-height: 420px;
