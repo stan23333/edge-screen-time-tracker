@@ -7,6 +7,7 @@ const SCREENSHOT_FALLBACK_INTERVAL_MS = 10 * 60 * 1000;
 const MODEL_REQUEST_TIMEOUT_MS = 15 * 1000;
 const ANALYSIS_MODEL_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 const MIN_SUMMARY_TEXT_CHARS = 200;
+const MAX_DIAGNOSTIC_LOGS = 1000;
 const LOCAL_ARCHIVE_DB = "web-screen-time-tracker-local-archive";
 const LOCAL_ARCHIVE_STORE = "handles";
 const LOCAL_ARCHIVE_HANDLE_KEY = "directory";
@@ -43,8 +44,13 @@ const EVIDENCE_LEVEL = {
   MEDIUM: "medium",
   LOW: "low"
 };
+const LOG_RESPONSE_EXCERPT_CHARS = 500;
+const LOG_TEXT_CHARS = 1000;
+const LOG_DETAILS_DEPTH = 4;
+const LOG_ARRAY_ITEMS = 25;
 let operationQueue = Promise.resolve();
 let summaryQueue = Promise.resolve();
+let diagnosticLogQueue = Promise.resolve();
 const pendingSummaryVisitIds = new Set();
 let lastSummaryStatus = {
   at: 0,
@@ -56,6 +62,207 @@ let lastAnalysisStatus = {
   status: "none",
   reason: "No analysis task has run yet."
 };
+
+function redactSensitiveText(value, limit = LOG_TEXT_CHARS) {
+  return String(value ?? "")
+    .replace(/(api[_-]?key|token|password|secret|authorization)=([^&\s]+)/gi, "$1=[redacted]")
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+    .replace(/Basic\s+[A-Za-z0-9+/=-]+/gi, "Basic [redacted]")
+    .slice(0, limit);
+}
+
+function sanitizeUrlForLog(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return "";
+  }
+
+  try {
+    const url = new URL(text);
+    const search = url.search ? "?[redacted]" : "";
+    const hash = url.hash ? "#[redacted]" : "";
+    return `${url.origin}${url.pathname}${search}${hash}`;
+  } catch {
+    return redactSensitiveText(text, LOG_TEXT_CHARS);
+  }
+}
+
+function sanitizeMessageForLog(value, limit = LOG_TEXT_CHARS) {
+  return redactSensitiveText(value, limit).replace(/https?:\/\/[^\s)]+/gi, (match) => sanitizeUrlForLog(match));
+}
+
+function isSensitiveLogKey(key) {
+  return /^(apiKey|authorization|password|secret|prompt|content|body|messages|payload|imageDataUrl|dataUrl|pageText|rawText|capturedText|text)$/i.test(String(key || ""));
+}
+
+function sanitizeDiagnosticDetails(value, depth = 0, key = "") {
+  if (value === null || value === undefined) {
+    return value;
+  }
+
+  if (isSensitiveLogKey(key)) {
+    return "[redacted]";
+  }
+
+  if (typeof value === "string") {
+    if (/^data:image\//i.test(value)) {
+      return "[redacted image data]";
+    }
+    if (/(^url$|url$|endpoint|baseUrl|testUrl|remoteUrl)/i.test(String(key || ""))) {
+      return sanitizeUrlForLog(value);
+    }
+    return redactSensitiveText(value, key === "responseTextExcerpt" ? LOG_RESPONSE_EXCERPT_CHARS : LOG_TEXT_CHARS);
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+
+  if (depth >= LOG_DETAILS_DEPTH) {
+    return Array.isArray(value) ? `[array:${value.length}]` : "[object]";
+  }
+
+  if (Array.isArray(value)) {
+    return value.slice(0, LOG_ARRAY_ITEMS).map((item) => sanitizeDiagnosticDetails(item, depth + 1));
+  }
+
+  if (typeof value === "object") {
+    const result = {};
+    for (const [entryKey, entryValue] of Object.entries(value)) {
+      if (typeof entryValue === "function" || entryValue === undefined) {
+        continue;
+      }
+      result[entryKey] = sanitizeDiagnosticDetails(entryValue, depth + 1, entryKey);
+    }
+    return result;
+  }
+
+  return redactSensitiveText(value);
+}
+
+function normalizeErrorForLog(error) {
+  if (!error) {
+    return null;
+  }
+
+  if (error instanceof Error) {
+    return {
+      name: error.name || "Error",
+      message: sanitizeMessageForLog(error.message || "Operation failed."),
+      stack: error.stack ? sanitizeMessageForLog(error.stack, 2000) : "",
+      status: error.status || null,
+      diagnostic: sanitizeDiagnosticDetails(error.diagnostic || null)
+    };
+  }
+
+  if (typeof error === "string") {
+    return {
+      name: "Error",
+      message: sanitizeMessageForLog(error)
+    };
+  }
+
+  return sanitizeDiagnosticDetails(error);
+}
+
+function sanitizeLogEntry(entry = {}) {
+  const error = normalizeErrorForLog(entry.error);
+  const message = entry.message || error?.message || "Operation logged.";
+  const log = {
+    ...entry,
+    level: entry.level || "info",
+    priority: entry.priority || "low",
+    source: entry.source || "background",
+    category: entry.category || "program",
+    operation: entry.operation || "unknown",
+    message: sanitizeMessageForLog(message, LOG_TEXT_CHARS),
+    details: sanitizeDiagnosticDetails(entry.details),
+    error
+  };
+
+  if (entry.url) {
+    log.url = sanitizeUrlForLog(entry.url);
+  }
+  if (entry.endpoint) {
+    log.endpoint = sanitizeUrlForLog(entry.endpoint);
+  }
+  if (entry.domain) {
+    log.domain = redactSensitiveText(entry.domain, 300);
+  }
+  if (entry.model) {
+    log.model = redactSensitiveText(entry.model, 300);
+  }
+  if (entry.provider) {
+    log.provider = redactSensitiveText(entry.provider, 300);
+  }
+  if (entry.status === undefined && error?.status) {
+    log.status = error.status;
+  }
+
+  return log;
+}
+
+async function addDiagnosticLog(entry) {
+  const task = () => StorageUtils.addDiagnosticLog(sanitizeLogEntry(entry));
+  const next = diagnosticLogQueue.then(task, task);
+  diagnosticLogQueue = next.catch(() => null);
+  try {
+    return await next;
+  } catch (error) {
+    console.error("Failed to write diagnostic log", error);
+    return null;
+  }
+}
+
+function modelLogFields(config = {}) {
+  const endpoint = config.endpoint || buildChatCompletionsEndpoint(config.baseUrl || "");
+  return {
+    provider: config.provider || "custom",
+    model: config.model || "",
+    endpoint: endpoint || config.baseUrl || ""
+  };
+}
+
+function modelRequestDiagnostic(config, endpoint, body, timeoutMs, extra = {}) {
+  return {
+    provider: config?.provider || "custom",
+    model: config?.model || "",
+    endpoint: sanitizeUrlForLog(endpoint),
+    method: "POST",
+    timeoutMs,
+    jsonMode: Boolean(body?.response_format),
+    maxTokens: body?.max_tokens || null,
+    fastMode: Boolean(body?.enable_thinking === false),
+    ...extra
+  };
+}
+
+function attachDiagnostic(error, diagnostic) {
+  error.diagnostic = {
+    ...(error.diagnostic || {}),
+    ...diagnostic
+  };
+  return error;
+}
+
+function errorCategory(error, fallback = "program") {
+  const message = String(error?.message || "").toLowerCase();
+  if (message.includes("required") || [400, 401, 403].includes(error?.status)) {
+    return "configuration";
+  }
+  if (message.includes("model request") || error?.status || error?.diagnostic?.endpoint) {
+    return "external";
+  }
+  return fallback;
+}
+
+function errorPriority(error, fallback = "medium") {
+  const message = String(error?.message || "").toLowerCase();
+  if (message.includes("required") || [400, 401, 403].includes(error?.status)) {
+    return "high";
+  }
+  return fallback;
+}
 
 function setLastAnalysisStatus(status, reason, details = {}) {
   lastAnalysisStatus = {
@@ -161,16 +368,34 @@ function enqueueOperation(task) {
     }
   };
   const next = operationQueue.then(wrappedTask, wrappedTask);
-  operationQueue = next.catch((error) => {
+  operationQueue = next.catch(async (error) => {
     console.error("Tracker operation failed", error);
+    await addDiagnosticLog({
+      level: "error",
+      priority: "high",
+      source: "runtime",
+      category: "program",
+      operation: "tracker_operation_queue",
+      message: error.message || "Tracker operation failed.",
+      error
+    });
   });
   return next;
 }
 
 function enqueueSummaryOperation(task) {
   const next = summaryQueue.then(task, task);
-  summaryQueue = next.catch((error) => {
+  summaryQueue = next.catch(async (error) => {
     console.error("Summary operation failed", error);
+    await addDiagnosticLog({
+      level: "error",
+      priority: "high",
+      source: "runtime",
+      category: "program",
+      operation: "summary_operation_queue",
+      message: error.message || "Summary operation failed.",
+      error
+    });
   });
   return next;
 }
@@ -966,13 +1191,34 @@ async function exportFullData() {
   };
 }
 
+async function exportDiagnosticLogs() {
+  return {
+    exportedAt: Date.now(),
+    version: 1,
+    timezone: TimeUtils.systemTimeZone(),
+    logs: await StorageUtils.getDiagnosticLogs()
+  };
+}
+
 async function callChatModel(config, prompt, content, { json = false, maxTokens = null, fast = false, timeoutMs = MODEL_REQUEST_TIMEOUT_MS } = {}) {
   const endpoints = chatCompletionEndpoints(config);
   if (!endpoints.length || !config?.model) {
-    throw new Error("Model base URL and model are required.");
+    throw attachDiagnostic(new Error("Model base URL and model are required."), {
+      ...modelLogFields(config),
+      stage: "validate",
+      jsonMode: Boolean(json),
+      maxTokens,
+      timeoutMs
+    });
   }
   if (!config.apiKey && !isLocalModelConfig(config)) {
-    throw new Error("Model API key is required.");
+    throw attachDiagnostic(new Error("Model API key is required."), {
+      ...modelLogFields(config),
+      stage: "validate",
+      jsonMode: Boolean(json),
+      maxTokens,
+      timeoutMs
+    });
   }
 
   const headers = {
@@ -1033,29 +1279,53 @@ async function callChatModel(config, prompt, content, { json = false, maxTokens 
 }
 
 async function requestChatCompletion(endpoint, headers, body, config, timeoutMs) {
-  let response = await fetchWithTimeout(endpoint, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body)
-  }, timeoutMs);
+  const requestDetails = (extra = {}, requestBody = body) => modelRequestDiagnostic(config, endpoint, requestBody, timeoutMs, extra);
+  let response = null;
+  try {
+    response = await fetchWithTimeout(endpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body)
+    }, timeoutMs);
+  } catch (error) {
+    throw attachDiagnostic(error, requestDetails({ stage: "fetch" }));
+  }
 
   if (!response.ok && body.response_format && isSiliconFlowConfig(config) && [400, 422].includes(response.status)) {
     const fallbackBody = { ...body };
     delete fallbackBody.response_format;
-    response = await fetchWithTimeout(endpoint, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(fallbackBody)
-    }, timeoutMs);
+    try {
+      response = await fetchWithTimeout(endpoint, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(fallbackBody)
+      }, timeoutMs);
+    } catch (error) {
+      throw attachDiagnostic(error, requestDetails({ stage: "fetch", jsonModeFallback: true }, fallbackBody));
+    }
   }
 
   if (!response.ok) {
-    const error = new Error(await modelErrorMessage(response, endpoint));
+    const detail = await modelErrorDetail(response, endpoint);
+    const error = new Error(detail.message);
     error.status = response.status;
-    throw error;
+    throw attachDiagnostic(error, requestDetails({
+      stage: "response",
+      status: response.status,
+      statusText: response.statusText,
+      responseTextExcerpt: detail.responseTextExcerpt
+    }));
   }
 
-  return response.json();
+  try {
+    return await response.json();
+  } catch (error) {
+    throw attachDiagnostic(new Error(`Model response JSON parse failed: ${error.message || error}`), requestDetails({
+      stage: "parse_response",
+      status: response.status,
+      statusText: response.statusText
+    }));
+  }
 }
 
 async function fetchWithTimeout(url, options, timeoutMs) {
@@ -1076,18 +1346,21 @@ async function fetchWithTimeout(url, options, timeoutMs) {
   }
 }
 
-async function modelErrorMessage(response, endpoint = "") {
-  let detail = "";
+async function modelErrorDetail(response, endpoint = "") {
+  let responseTextExcerpt = "";
   try {
     const text = await response.text();
     if (text) {
-      detail = text.slice(0, 500);
+      responseTextExcerpt = text.slice(0, LOG_RESPONSE_EXCERPT_CHARS);
     }
   } catch {
-    detail = "";
+    responseTextExcerpt = "";
   }
 
-  return `Model request failed${endpoint ? ` at ${endpoint}` : ""}: ${response.status} ${response.statusText}${detail ? ` - ${detail}` : ""}`;
+  return {
+    responseTextExcerpt,
+    message: `Model request failed${endpoint ? ` at ${sanitizeUrlForLog(endpoint)}` : ""}: ${response.status} ${response.statusText}${responseTextExcerpt ? ` - ${responseTextExcerpt}` : ""}`
+  };
 }
 
 function isSiliconFlowConfig(config) {
@@ -1164,6 +1437,26 @@ function normalizeSummaryJson(rawText) {
     keyPoints: Array.isArray(parsed.keyPoints) ? parsed.keyPoints.map(String).slice(0, 12) : [],
     confidence: Number.isFinite(Number(parsed.confidence)) ? Number(parsed.confidence) : null
   };
+}
+
+async function logInvalidSummaryJson({ identity, summaryId, visitId = "", resultText, settings, operation = "summary_model_invalid_json" }) {
+  await addDiagnosticLog({
+    level: "warn",
+    priority: "medium",
+    source: "records",
+    category: "external",
+    operation,
+    message: "Summary model returned text that could not be parsed as structured JSON.",
+    domain: identity?.domain || "",
+    url: identity?.url || "",
+    summaryId,
+    visitId,
+    ...modelLogFields(settings?.summaryModel || {}),
+    details: {
+      responseTextExcerpt: String(resultText || "").slice(0, LOG_RESPONSE_EXCERPT_CHARS),
+      expectedShape: "summary/topics/contentType/intent/keyPoints/confidence"
+    }
+  });
 }
 
 function parseJsonObjectFromText(rawText) {
@@ -1732,6 +2025,31 @@ async function createSummaryRecordForTab(tab, settings, status = SUMMARY_STATUS.
   return { record, dateKey, identity };
 }
 
+async function logSummaryCaptureIssue({ identity, summaryId, visitId, captureMeta, message, priority = "low", category = "site", operation = "capture_page_content" }) {
+  await addDiagnosticLog({
+    level: priority === "low" ? "warn" : "error",
+    priority,
+    source: "records",
+    category,
+    operation,
+    message,
+    domain: identity?.domain || "",
+    url: identity?.url || "",
+    summaryId,
+    visitId,
+    details: {
+      captureMethod: captureMeta?.captureMethod || "",
+      captureStatus: captureMeta?.captureStatus || "",
+      evidenceLevel: captureMeta?.evidenceLevel || "",
+      sourceCharCount: captureMeta?.sourceCharCount || 0,
+      captureError: captureMeta?.captureError || "",
+      screenshotAttemptedAt: captureMeta?.screenshotAttemptedAt || null,
+      screenshotCapturedAt: captureMeta?.screenshotCapturedAt || null,
+      captureDiagnostics: captureMeta?.captureDiagnostics || null
+    }
+  });
+}
+
 async function runSummaryRecord({ tabId, url, summaryId, dateKey, visitId, immediate = false }) {
   if (!immediate) {
     await delay(2000);
@@ -1811,6 +2129,18 @@ async function runSummaryRecord({ tabId, url, summaryId, dateKey, visitId, immed
       record.captureError = captureMeta.captureError || "";
     });
 
+    if ([CAPTURE_STATUS.BLOCKED, CAPTURE_STATUS.LOW_CONTENT].includes(captureMeta.captureStatus)) {
+      await logSummaryCaptureIssue({
+        identity,
+        summaryId,
+        visitId,
+        captureMeta,
+        message: captureMeta.captureStatus === CAPTURE_STATUS.BLOCKED
+          ? "Page content capture was blocked; screenshot fallback may be needed."
+          : "Page content capture returned low content; summary evidence may be weak."
+      });
+    }
+
     if (captureMeta.captureStatus !== CAPTURE_STATUS.OK) {
       await notifyScreenshotFallbackNeeded(settings, identity.domain);
 
@@ -1829,6 +2159,19 @@ async function runSummaryRecord({ tabId, url, summaryId, dateKey, visitId, immed
           summaryId,
           domain: identity.domain,
           captureStatus: captureMeta.captureStatus
+        });
+        await logSummaryCaptureIssue({
+          identity,
+          summaryId,
+          visitId,
+          captureMeta: {
+            ...captureMeta,
+            captureError: updated?.error || captureMeta.captureError
+          },
+          priority: "medium",
+          category: "configuration",
+          operation: "screenshot_fallback_disabled",
+          message: updated?.error || "Screenshot fallback is disabled or this domain is not allowed."
         });
         return updated;
       }
@@ -1851,6 +2194,20 @@ async function runSummaryRecord({ tabId, url, summaryId, dateKey, visitId, immed
           summaryId,
           domain: identity.domain,
           captureStatus: CAPTURE_STATUS.WAITING_VISIBLE_TAB
+        });
+        await logSummaryCaptureIssue({
+          identity,
+          summaryId,
+          visitId,
+          captureMeta: {
+            ...captureMeta,
+            captureStatus: CAPTURE_STATUS.WAITING_VISIBLE_TAB,
+            captureError: updated?.error || captureMeta.captureError
+          },
+          priority: "low",
+          category: "site",
+          operation: "screenshot_waiting_visible_tab",
+          message: updated?.error || "Blocked page is waiting for a visible active tab."
         });
         return updated;
       }
@@ -1879,6 +2236,16 @@ async function runSummaryRecord({ tabId, url, summaryId, dateKey, visitId, immed
         }
       });
       lastCaptureMeta = screenshotSummary.meta;
+      if (!parseJsonObjectFromText(screenshotSummary.result.text)) {
+        await logInvalidSummaryJson({
+          identity,
+          summaryId,
+          visitId,
+          resultText: screenshotSummary.result.text,
+          settings,
+          operation: "summary_screenshot_invalid_json"
+        });
+      }
       const updated = await updateSummaryRecord(dateKey, summaryId, (record) => {
         record.status = SUMMARY_STATUS.DONE;
         record.title = tab.title || record.title;
@@ -1910,6 +2277,16 @@ async function runSummaryRecord({ tabId, url, summaryId, dateKey, visitId, immed
       buildTextSummaryContent(identity, tab, captured),
       { json: true, maxTokens: 900 }
     );
+    if (!parseJsonObjectFromText(result.text)) {
+      await logInvalidSummaryJson({
+        identity,
+        summaryId,
+        visitId,
+        resultText: result.text,
+        settings,
+        operation: "summary_text_invalid_json"
+      });
+    }
     const updated = await updateSummaryRecord(dateKey, summaryId, (record) => {
       record.status = SUMMARY_STATUS.DONE;
       record.title = captured.title || tab.title || record.title;
@@ -1955,6 +2332,27 @@ async function runSummaryRecord({ tabId, url, summaryId, dateKey, visitId, immed
     });
     await updateVisitSummaryStatus(summaryId, SUMMARY_STATUS.ERROR);
     setLastSummaryStatus("error", error.message || "Summary failed.", { summaryId });
+    await addDiagnosticLog({
+      level: "error",
+      priority: errorPriority(error, "medium"),
+      source: "records",
+      category: errorCategory(error, attemptedScreenshot ? "site" : "external"),
+      operation: attemptedScreenshot ? "summarize_screenshot_fallback" : "summarize_page",
+      message: error.message || "Summary failed.",
+      domain: identity.domain,
+      url: identity.url,
+      summaryId,
+      visitId,
+      status: error.status || null,
+      ...modelLogFields(settings.summaryModel),
+      details: {
+        dateKey,
+        attemptedScreenshot,
+        captureMeta: lastCaptureMeta,
+        diagnostic: error.diagnostic || null
+      },
+      error
+    });
     return updated;
   } finally {
     if (visitId) {
@@ -2078,6 +2476,16 @@ async function maybeScreenshotFallbackActiveTab() {
         });
       }
     });
+    if (!parseJsonObjectFromText(screenshotSummary.result.text)) {
+      await logInvalidSummaryJson({
+        identity,
+        summaryId,
+        visitId: session.visitId,
+        resultText: screenshotSummary.result.text,
+        settings,
+        operation: "scheduled_screenshot_invalid_json"
+      });
+    }
     const updated = await updateSummaryRecord(match.dateKey, summaryId, (record) => {
       record.status = SUMMARY_STATUS.DONE;
       record.title = tab.title || record.title;
@@ -2113,6 +2521,26 @@ async function maybeScreenshotFallbackActiveTab() {
     setLastSummaryStatus("error", error.message || "Screenshot fallback failed.", {
       domain: identity.domain,
       summaryId
+    });
+    await addDiagnosticLog({
+      level: "error",
+      priority: errorPriority(error, "medium"),
+      source: "records",
+      category: errorCategory(error, "site"),
+      operation: "scheduled_screenshot_fallback",
+      message: error.message || "Screenshot fallback failed.",
+      domain: identity.domain,
+      url: identity.url,
+      summaryId,
+      visitId: session.visitId,
+      status: error.status || null,
+      ...modelLogFields(settings.summaryModel),
+      details: {
+        dateKey: match.dateKey,
+        diagnostic: error.diagnostic || null,
+        captureDiagnostics: error.captureDiagnostics || null
+      },
+      error
     });
     return null;
   } finally {
@@ -2183,6 +2611,22 @@ async function maybeAutoSummarizeTab(tab, { silentUnsupported = false } = {}) {
   } catch (error) {
     pendingSummaryVisitIds.delete(session.visitId);
     setLastSummaryStatus("error", error.message || "Failed to queue summary task.", { domain: identity.domain });
+    await addDiagnosticLog({
+      level: "error",
+      priority: "high",
+      source: "records",
+      category: errorCategory(error, "program"),
+      operation: "queue_summary_task",
+      message: error.message || "Failed to queue summary task.",
+      domain: identity.domain,
+      url: identity.url,
+      visitId: session.visitId,
+      status: error.status || null,
+      details: {
+        diagnostic: error.diagnostic || null
+      },
+      error
+    });
     throw error;
   }
 }
@@ -2226,8 +2670,10 @@ async function runAnalysis(period, endDateKey) {
   const startedAt = Date.now();
   setLastAnalysisStatus("running", `Running ${period} analysis.`, { period, endDateKey, startedAt });
   let report = null;
+  let analysisModelConfig = null;
   try {
     const settings = await StorageUtils.getSettings();
+    analysisModelConfig = settings.analysisModel;
     const keys = dateRangeKeys(period, endDateKey);
     const dailyStats = await rebuildAndStoreDailyStats();
     const visitEvents = await StorageUtils.getVisitEvents();
@@ -2292,6 +2738,21 @@ async function runAnalysis(period, endDateKey) {
         status: "error",
         error: error.message || "Local archive failed."
       };
+      await addDiagnosticLog({
+        level: "error",
+        priority: "medium",
+        source: "analysis",
+        category: "storage",
+        operation: "archive_analysis_local",
+        message: error.message || "Local archive failed.",
+        reportId: report.id,
+        details: {
+          period,
+          startDate: report.startDate,
+          endDate: report.endDate
+        },
+        error
+      });
     }
     try {
       const remoteAnalysis = await backupAnalysisReportToWebdav(report);
@@ -2305,6 +2766,24 @@ async function runAnalysis(period, endDateKey) {
         status: "error",
         error: error.message || "WebDAV backup failed."
       };
+      await addDiagnosticLog({
+        level: "error",
+        priority: "medium",
+        source: "analysis",
+        category: settings.webdav.url ? "external" : "configuration",
+        operation: "backup_analysis_webdav",
+        message: error.message || "WebDAV backup failed.",
+        reportId: report.id,
+        endpoint: settings.webdav.url,
+        status: error.status || null,
+        details: {
+          period,
+          startDate: report.startDate,
+          endDate: report.endDate,
+          diagnostic: error.diagnostic || null
+        },
+        error
+      });
     }
     report.backup = backup;
     await StorageUtils.setAnalysisReports(analysisReports);
@@ -2323,6 +2802,25 @@ async function runAnalysis(period, endDateKey) {
       startedAt,
       finishedAt: Date.now(),
       reportId: report?.id || null
+    });
+    await addDiagnosticLog({
+      level: "error",
+      priority: errorPriority(error, "high"),
+      source: "analysis",
+      category: errorCategory(error, "program"),
+      operation: "run_analysis",
+      message: error.message || "Analysis failed.",
+      reportId: report?.id || null,
+      status: error.status || null,
+      ...modelLogFields(analysisModelConfig || {}),
+      details: {
+        period,
+        endDateKey,
+        startedAt,
+        finishedAt: Date.now(),
+        diagnostic: error.diagnostic || null
+      },
+      error
     });
     throw error;
   }
@@ -2622,7 +3120,12 @@ async function putWebdavJson(path, payload) {
   });
 
   if (!response.ok) {
-    throw new Error(`WebDAV backup failed: ${response.status} ${response.statusText}`);
+    throw await webdavResponseError("WebDAV backup failed", response, {
+      stage: "put_json",
+      method: "PUT",
+      path,
+      endpoint: `${baseUrl}/${path}`
+    });
   }
 
   return {
@@ -2648,7 +3151,12 @@ async function putWebdavText(path, text, contentType = "text/markdown; charset=u
   });
 
   if (!response.ok) {
-    throw new Error(`WebDAV backup failed: ${response.status} ${response.statusText}`);
+    throw await webdavResponseError("WebDAV backup failed", response, {
+      stage: "put_text",
+      method: "PUT",
+      path,
+      endpoint: `${baseUrl}/${path}`
+    });
   }
 
   return {
@@ -2670,7 +3178,12 @@ async function ensureWebdavDirectories(baseUrl, path, settings) {
     });
 
     if (!response.ok && response.status !== 405) {
-      throw new Error(`WebDAV folder create failed: ${response.status} ${response.statusText}`);
+      throw await webdavResponseError("WebDAV folder create failed", response, {
+        stage: "ensure_directory",
+        method: "MKCOL",
+        path: cursor,
+        endpoint: `${baseUrl}/${cursor}`
+      });
     }
   }
 }
@@ -2750,6 +3263,7 @@ function reportsForDateKeys(reports, dateKeys) {
 
 async function backupToWebdav() {
   const range = TimeUtils.weekRangeFromTimestamp(Date.now());
+  const settings = await StorageUtils.getSettings();
   const dateKeys = [];
   for (let cursor = range.startTs; cursor < range.endTs; cursor += 24 * 60 * 60 * 1000) {
     dateKeys.push(TimeUtils.dateKeyFromTimestamp(cursor));
@@ -2761,11 +3275,36 @@ async function backupToWebdav() {
     local.records = await archiveDailyRecordsForDateKeys(dateKeys);
   } catch (error) {
     local.records = { status: "error", error: error.message || "Local archive failed.", results: [] };
+    await addDiagnosticLog({
+      level: "error",
+      priority: "medium",
+      source: "settings",
+      category: "storage",
+      operation: "backup_records_local",
+      message: error.message || "Local archive failed.",
+      details: { dateKeys },
+      error
+    });
   }
   try {
     remote.records = await backupDailyRecordsForDateKeys(dateKeys);
   } catch (error) {
     remote.records = { status: "error", error: error.message || "WebDAV backup failed.", results: [] };
+    await addDiagnosticLog({
+      level: "error",
+      priority: "medium",
+      source: "settings",
+      category: settings.webdav.url ? "external" : "configuration",
+      operation: "backup_records_webdav",
+      message: error.message || "WebDAV backup failed.",
+      endpoint: settings.webdav.url,
+      status: error.status || null,
+      details: {
+        dateKeys,
+        diagnostic: error.diagnostic || null
+      },
+      error
+    });
   }
 
   const analysisReports = await StorageUtils.getAnalysisReports();
@@ -2779,6 +3318,21 @@ async function backupToWebdav() {
     } catch (error) {
       report.backup.local = { status: "error", error: error.message || "Local archive failed." };
       local.analysis.push(report.backup.local);
+      await addDiagnosticLog({
+        level: "error",
+        priority: "medium",
+        source: "settings",
+        category: "storage",
+        operation: "backup_analysis_local",
+        message: error.message || "Local archive failed.",
+        reportId: report.id,
+        details: {
+          period: report.period,
+          startDate: report.startDate,
+          endDate: report.endDate
+        },
+        error
+      });
     }
     try {
       report.backup.remote = await backupAnalysisReportToWebdav(report);
@@ -2786,6 +3340,24 @@ async function backupToWebdav() {
     } catch (error) {
       report.backup.remote = { status: "error", error: error.message || "WebDAV backup failed." };
       remote.analysis.push(report.backup.remote);
+      await addDiagnosticLog({
+        level: "error",
+        priority: "medium",
+        source: "settings",
+        category: settings.webdav.url ? "external" : "configuration",
+        operation: "backup_analysis_webdav",
+        message: error.message || "WebDAV backup failed.",
+        reportId: report.id,
+        endpoint: settings.webdav.url,
+        status: error.status || null,
+        details: {
+          period: report.period,
+          startDate: report.startDate,
+          endDate: report.endDate,
+          diagnostic: error.diagnostic || null
+        },
+        error
+      });
     }
   }
   await StorageUtils.setAnalysisReports(analysisReports);
@@ -2800,12 +3372,45 @@ async function backupToWebdav() {
 }
 
 async function testLocalArchive() {
-  const result = await writeLocalArchiveJson(`system/test-local-archive-${Date.now()}.json`, {
-    ok: true,
-    testedAt: Date.now(),
-    nonce: crypto.randomUUID()
-  });
-  return { ok: true, ...result };
+  const startedAt = Date.now();
+  try {
+    const result = await writeLocalArchiveJson(`system/test-local-archive-${Date.now()}.json`, {
+      ok: true,
+      testedAt: Date.now(),
+      nonce: crypto.randomUUID()
+    });
+    await addDiagnosticLog({
+      level: "info",
+      priority: "medium",
+      source: "settings",
+      category: "configuration",
+      operation: "test_local_archive",
+      message: "Local archive test passed.",
+      details: {
+        durationMs: Date.now() - startedAt,
+        mode: result.mode,
+        status: result.status,
+        relativePath: result.relativePath,
+        displayPath: result.displayPath,
+        fallbackReason: result.fallbackReason || ""
+      }
+    });
+    return { ok: true, ...result };
+  } catch (error) {
+    await addDiagnosticLog({
+      level: "error",
+      priority: "high",
+      source: "settings",
+      category: "configuration",
+      operation: "test_local_archive",
+      message: error.message || "Local archive test failed.",
+      details: {
+        durationMs: Date.now() - startedAt
+      },
+      error
+    });
+    throw error;
+  }
 }
 
 async function openLocalArchiveDownload(downloadId) {
@@ -2820,111 +3425,268 @@ async function testModel(target) {
   const settings = await StorageUtils.getSettings();
   const config = target === "analysis" ? settings.analysisModel : settings.summaryModel;
   const nonce = crypto.randomUUID();
+  const startedAt = Date.now();
+  const operation = target === "analysis" ? "test_analysis_model" : "test_summary_model";
 
-  if (target === "analysis") {
-    const result = await callChatModel(
-      config,
-      `Reply with exactly this token and no other text: ANALYSIS_TEST_${nonce}`,
-      "Connectivity test.",
-      { maxTokens: 32, fast: true, timeoutMs: 10 * 1000 }
-    );
-    if (result.text.trim() !== `ANALYSIS_TEST_${nonce}`) {
-      throw new Error("Analysis model returned text, but not the expected test response.");
+  try {
+    if (target === "analysis") {
+      const result = await callChatModel(
+        config,
+        `Reply with exactly this token and no other text: ANALYSIS_TEST_${nonce}`,
+        "Connectivity test.",
+        { maxTokens: 32, fast: true, timeoutMs: 10 * 1000 }
+      );
+      if (result.text.trim() !== `ANALYSIS_TEST_${nonce}`) {
+        const error = new Error("Analysis model returned text, but not the expected test response.");
+        error.diagnostic = {
+          responseTextExcerpt: result.text.slice(0, LOG_RESPONSE_EXCERPT_CHARS),
+          expectedPrefix: "ANALYSIS_TEST"
+        };
+        throw error;
+      }
+
+      await addDiagnosticLog({
+        level: "info",
+        priority: "medium",
+        source: "settings",
+        category: "configuration",
+        operation,
+        message: "Analysis model test passed.",
+        ...modelLogFields(config),
+        details: {
+          durationMs: Date.now() - startedAt,
+          usage: result.usage || null,
+          timeoutMs: 10 * 1000,
+          maxTokens: 32
+        }
+      });
+      return {
+        ok: true,
+        result: result.text,
+        usage: result.usage
+      };
     }
 
+    const result = await callChatModel(
+      config,
+      `Return only this compact JSON and no markdown: {"summary":"SUMMARY_TEST_${nonce}","topics":["api-test"],"contentType":"other","intent":"test","keyPoints":["connectivity"],"confidence":1}`,
+      "Connectivity test.",
+      { json: true, maxTokens: 96, fast: true, timeoutMs: 10 * 1000 }
+    );
+    const resultText = result.text;
+    const raw = parseJsonObjectFromText(resultText);
+    if (!raw) {
+      const error = new Error("Summary model did not return valid JSON.");
+      error.diagnostic = {
+        responseTextExcerpt: resultText.slice(0, LOG_RESPONSE_EXCERPT_CHARS),
+        expectedShape: "summary/topics/contentType/intent/keyPoints/confidence"
+      };
+      throw error;
+    }
+
+    const parsed = normalizeSummaryJson(resultText);
+    const hasRequiredShape =
+      typeof raw.summary === "string" &&
+      Array.isArray(raw.topics) &&
+      typeof raw.contentType === "string" &&
+      typeof raw.intent === "string" &&
+      Array.isArray(raw.keyPoints) &&
+      Object.prototype.hasOwnProperty.call(raw, "confidence");
+    if (!hasRequiredShape || parsed.summary !== `SUMMARY_TEST_${nonce}` || parsed.intent !== "test") {
+      const error = new Error("Summary model returned text, but not the expected structured test JSON.");
+      error.diagnostic = {
+        responseTextExcerpt: resultText.slice(0, LOG_RESPONSE_EXCERPT_CHARS),
+        hasRequiredShape
+      };
+      throw error;
+    }
+
+    await addDiagnosticLog({
+      level: "info",
+      priority: "medium",
+      source: "settings",
+      category: "configuration",
+      operation,
+      message: "Summary model test passed.",
+      ...modelLogFields(config),
+      details: {
+        durationMs: Date.now() - startedAt,
+        usage: result.usage || null,
+        timeoutMs: 10 * 1000,
+        maxTokens: 96,
+        jsonMode: true
+      }
+    });
     return {
       ok: true,
-      result: result.text,
+      result: resultText,
       usage: result.usage
     };
+  } catch (error) {
+    await addDiagnosticLog({
+      level: "error",
+      priority: "high",
+      source: "settings",
+      category: "configuration",
+      operation,
+      message: error.message || `${target} model test failed.`,
+      ...modelLogFields(config),
+      status: error.status || null,
+      details: {
+        durationMs: Date.now() - startedAt,
+        target,
+        diagnostic: error.diagnostic || null
+      },
+      error
+    });
+    throw error;
   }
+}
 
-  const result = await callChatModel(
-    config,
-    `Return only this compact JSON and no markdown: {"summary":"SUMMARY_TEST_${nonce}","topics":["api-test"],"contentType":"other","intent":"test","keyPoints":["connectivity"],"confidence":1}`,
-    "Connectivity test.",
-    { json: true, maxTokens: 96, fast: true, timeoutMs: 10 * 1000 }
-  );
-  const resultText = result.text;
-  const raw = parseJsonObjectFromText(resultText);
-  if (!raw) {
-    throw new Error("Summary model did not return valid JSON.");
+async function webdavResponseError(message, response, diagnostic = {}) {
+  let responseTextExcerpt = "";
+  try {
+    responseTextExcerpt = (await response.text()).slice(0, LOG_RESPONSE_EXCERPT_CHARS);
+  } catch {
+    responseTextExcerpt = "";
   }
-
-  const parsed = normalizeSummaryJson(resultText);
-  const hasRequiredShape =
-    typeof raw.summary === "string" &&
-    Array.isArray(raw.topics) &&
-    typeof raw.contentType === "string" &&
-    typeof raw.intent === "string" &&
-    Array.isArray(raw.keyPoints) &&
-    Object.prototype.hasOwnProperty.call(raw, "confidence");
-  if (!hasRequiredShape || parsed.summary !== `SUMMARY_TEST_${nonce}` || parsed.intent !== "test") {
-    throw new Error("Summary model returned text, but not the expected structured test JSON.");
-  }
-
-  return {
-    ok: true,
-    result: resultText,
-    usage: result.usage
+  const error = new Error(`${message}: ${response.status} ${response.statusText}`);
+  error.status = response.status;
+  error.diagnostic = {
+    ...diagnostic,
+    status: response.status,
+    statusText: response.statusText,
+    responseTextExcerpt
   };
+  return error;
 }
 
 async function testWebdav() {
   const settings = await StorageUtils.getSettings();
-  if (!settings.webdav.url) {
-    throw new Error("WebDAV URL is required.");
-  }
-
-  const { baseUrl, basePath } = webdavBaseAndPath(settings);
-  const testPath = `${basePath || "browser-tracker"}/browser-tracker-test-${Date.now()}.json`;
-  const testUrl = `${baseUrl}/${testPath}`;
-  const headers = webdavHeaders(settings);
-  const nonce = crypto.randomUUID();
-  const payload = { ok: true, nonce, testedAt: Date.now() };
-
-  await ensureWebdavDirectories(baseUrl, testPath, settings);
-
-  const putResponse = await fetch(testUrl, {
-    method: "PUT",
-    headers: {
-      ...headers,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(payload)
-  });
-
-  if (!putResponse.ok) {
-    throw new Error(`WebDAV write test failed: ${putResponse.status} ${putResponse.statusText}`);
-  }
-
-  const getResponse = await fetch(testUrl, { method: "GET", headers });
-  if (!getResponse.ok) {
-    throw new Error(`WebDAV read test failed: ${getResponse.status} ${getResponse.statusText}`);
-  }
-
-  const readText = await getResponse.text();
-  let readPayload = null;
-  try {
-    readPayload = JSON.parse(readText);
-  } catch {
-    throw new Error("WebDAV read test returned non-JSON content.");
-  }
-
-  if (readPayload?.nonce !== nonce) {
-    throw new Error("WebDAV read test returned different content than the uploaded test file.");
-  }
-
-  const deleteResponse = await fetch(testUrl, { method: "DELETE", headers });
-  if (!deleteResponse.ok && deleteResponse.status !== 404) {
-    throw new Error(`WebDAV cleanup failed: ${deleteResponse.status} ${deleteResponse.statusText}`);
-  }
-
-  return {
-    ok: true,
-    path: testPath,
-    status: getResponse.status
+  const startedAt = Date.now();
+  let context = {
+    configured: Boolean(settings.webdav.url),
+    baseUrl: "",
+    testPath: "",
+    testUrl: "",
+    stage: "validate"
   };
+
+  try {
+    if (!settings.webdav.url) {
+      const error = new Error("WebDAV URL is required.");
+      error.diagnostic = { ...context };
+      throw error;
+    }
+
+    const { baseUrl, basePath } = webdavBaseAndPath(settings);
+    const testPath = `${basePath || "browser-tracker"}/browser-tracker-test-${Date.now()}.json`;
+    const testUrl = `${baseUrl}/${testPath}`;
+    const headers = webdavHeaders(settings);
+    const nonce = crypto.randomUUID();
+    const payload = { ok: true, nonce, testedAt: Date.now() };
+    context = { ...context, baseUrl, testPath, testUrl };
+
+    context.stage = "ensure_directories";
+    await ensureWebdavDirectories(baseUrl, testPath, settings);
+
+    context.stage = "put";
+    const putResponse = await fetch(testUrl, {
+      method: "PUT",
+      headers: {
+        ...headers,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!putResponse.ok) {
+      throw await webdavResponseError("WebDAV write test failed", putResponse, {
+        ...context,
+        method: "PUT"
+      });
+    }
+
+    context.stage = "get";
+    const getResponse = await fetch(testUrl, { method: "GET", headers });
+    if (!getResponse.ok) {
+      throw await webdavResponseError("WebDAV read test failed", getResponse, {
+        ...context,
+        method: "GET"
+      });
+    }
+
+    const readText = await getResponse.text();
+    let readPayload = null;
+    try {
+      readPayload = JSON.parse(readText);
+    } catch (error) {
+      throw attachDiagnostic(new Error("WebDAV read test returned non-JSON content."), {
+        ...context,
+        method: "GET",
+        responseTextExcerpt: readText.slice(0, LOG_RESPONSE_EXCERPT_CHARS)
+      });
+    }
+
+    if (readPayload?.nonce !== nonce) {
+      throw attachDiagnostic(new Error("WebDAV read test returned different content than the uploaded test file."), {
+        ...context,
+        method: "GET",
+        expectedNoncePresent: true,
+        actualNoncePresent: Boolean(readPayload?.nonce)
+      });
+    }
+
+    context.stage = "delete";
+    const deleteResponse = await fetch(testUrl, { method: "DELETE", headers });
+    if (!deleteResponse.ok && deleteResponse.status !== 404) {
+      throw await webdavResponseError("WebDAV cleanup failed", deleteResponse, {
+        ...context,
+        method: "DELETE"
+      });
+    }
+
+    await addDiagnosticLog({
+      level: "info",
+      priority: "medium",
+      source: "settings",
+      category: "configuration",
+      operation: "test_webdav",
+      message: "WebDAV test passed.",
+      endpoint: testUrl,
+      status: getResponse.status,
+      details: {
+        durationMs: Date.now() - startedAt,
+        path: testPath,
+        putStatus: putResponse.status,
+        getStatus: getResponse.status,
+        deleteStatus: deleteResponse.status
+      }
+    });
+    return {
+      ok: true,
+      path: testPath,
+      status: getResponse.status
+    };
+  } catch (error) {
+    await addDiagnosticLog({
+      level: "error",
+      priority: "high",
+      source: "settings",
+      category: "configuration",
+      operation: "test_webdav",
+      message: error.message || "WebDAV test failed.",
+      endpoint: context.testUrl || context.baseUrl || settings.webdav.url,
+      status: error.status || null,
+      details: {
+        durationMs: Date.now() - startedAt,
+        context,
+        diagnostic: error.diagnostic || null
+      },
+      error
+    });
+    throw error;
+  }
 }
 
 async function getSnapshot() {
@@ -3111,8 +3873,37 @@ chrome.idle.onStateChanged.addListener(async (idleState) => {
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (["GET_SETTINGS", "SAVE_SETTINGS", "TEST_MODEL", "TEST_LOCAL_ARCHIVE", "OPEN_LOCAL_ARCHIVE", "TEST_WEBDAV", "RUN_ANALYSIS", "GET_ANALYSIS_DATA"].includes(message?.type)) {
+  if (["GET_SETTINGS", "SAVE_SETTINGS", "TEST_MODEL", "TEST_LOCAL_ARCHIVE", "OPEN_LOCAL_ARCHIVE", "TEST_WEBDAV", "RUN_ANALYSIS", "GET_ANALYSIS_DATA", "GET_LOGS", "ADD_LOG", "CLEAR_LOGS", "EXPORT_LOGS"].includes(message?.type)) {
     (async () => {
+      if (message.type === "GET_LOGS") {
+        sendResponse({
+          logs: await StorageUtils.getDiagnosticLogs(),
+          maxLogs: MAX_DIAGNOSTIC_LOGS
+        });
+        return;
+      }
+
+      if (message.type === "ADD_LOG") {
+        sendResponse({
+          log: await addDiagnosticLog({
+            source: "ui",
+            ...(message.entry || {})
+          })
+        });
+        return;
+      }
+
+      if (message.type === "CLEAR_LOGS") {
+        await StorageUtils.clearDiagnosticLogs();
+        sendResponse({ ok: true });
+        return;
+      }
+
+      if (message.type === "EXPORT_LOGS") {
+        sendResponse(await exportDiagnosticLogs());
+        return;
+      }
+
       if (message.type === "GET_SETTINGS") {
         sendResponse(await StorageUtils.getSettings());
         return;
@@ -3158,7 +3949,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           analysisStatus: lastAnalysisStatus
         });
       }
-    })().catch((error) => {
+    })().catch(async (error) => {
+      if (!["TEST_MODEL", "TEST_WEBDAV", "TEST_LOCAL_ARCHIVE", "RUN_ANALYSIS"].includes(message?.type)) {
+        await addDiagnosticLog({
+          level: "error",
+          priority: "high",
+          source: "runtime",
+          category: "program",
+          operation: `message_${String(message?.type || "unknown").toLowerCase()}`,
+          message: error.message || "Message handler failed.",
+          error
+        });
+      }
       sendResponse({ error: error.message || "Operation failed" });
     });
 

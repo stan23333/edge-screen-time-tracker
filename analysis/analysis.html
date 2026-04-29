@@ -16,6 +16,7 @@
         <nav>
           <a href="../dashboard/dashboard.html">Dashboard</a>
           <a href="../records/records.html">Records</a>
+          <a href="../logs/logs.html">Logs</a>
           <a href="../settings/settings.html">Settings</a>
         </nav>
       </header>
@@ -72,6 +73,16 @@
         </article>
       </section>
 
+      <section class="panel topicsSection">
+        <div class="sectionTop">
+          <div>
+            <p class="eyebrow">Topics</p>
+            <h2>Frequent themes</h2>
+          </div>
+        </div>
+        <div id="topicList" class="topicList"></div>
+      </section>
+
       <section class="layout">
         <aside class="panel">
           <h2>Reports</h2>
@@ -88,16 +99,6 @@
           <div id="reportBackup" class="backupBox">Archive path appears after a report is generated.</div>
           <div id="reportBody" class="markdownBody">Generate or select a report.</div>
         </article>
-      </section>
-
-      <section class="panel topicsSection">
-        <div class="sectionTop">
-          <div>
-            <p class="eyebrow">Topics</p>
-            <h2>Frequent themes</h2>
-          </div>
-        </div>
-        <div id="topicList" class="topicList"></div>
       </section>
     </main>
     <script src="../utils/time.js"></script>

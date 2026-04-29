@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Diagnostic Logs</title>
+    <link rel="stylesheet" href="logs.css">
+  </head>
+  <body>
+    <main class="page">
+      <header class="topbar">
+        <div class="brandBlock">
+          <img class="mark" src="../assets/icon128.png" alt="">
+          <div>
+            <p class="eyebrow">Web Screen Time Tracker</p>
+            <h1>Logs</h1>
+            <span id="logCount" class="logCount">0 logs</span>
+          </div>
+        </div>
+        <nav>
+          <a href="../dashboard/dashboard.html">Dashboard</a>
+          <a href="../records/records.html">Records</a>
+          <a href="../analysis/analysis.html">Analysis</a>
+          <a href="../settings/settings.html">Settings</a>
+        </nav>
+      </header>
+
+      <section class="controls panel">
+        <label>Level
+          <select id="levelFilter">
+            <option value="all">All</option>
+            <option value="error">Error</option>
+            <option value="warn">Warn</option>
+            <option value="info">Info</option>
+          </select>
+        </label>
+        <label>Priority
+          <select id="priorityFilter">
+            <option value="important">High + medium</option>
+            <option value="all">All</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+          </select>
+        </label>
+        <label>Source
+          <select id="sourceFilter">
+            <option value="all">All</option>
+          </select>
+        </label>
+        <label>Category
+          <select id="categoryFilter">
+            <option value="all">All</option>
+          </select>
+        </label>
+        <label class="searchLabel">Search
+          <input id="searchInput" type="search" placeholder="message, domain, model, operation">
+        </label>
+        <div class="actions">
+          <button id="refreshLogs" type="button">Refresh</button>
+          <button id="exportLogs" type="button" class="secondary">Export JSON</button>
+          <button id="clearLogs" type="button" class="danger">Clear</button>
+        </div>
+      </section>
+
+      <section id="confirmClear" class="confirmBar" hidden>
+        <span>Clear all diagnostic logs?</span>
+        <button id="confirmClearLogs" type="button" class="danger">Clear logs</button>
+        <button id="cancelClearLogs" type="button" class="secondary">Cancel</button>
+      </section>
+
+      <section class="metrics">
+        <article class="metricCard high">
+          <span>High</span>
+          <strong id="highCount">0</strong>
+        </article>
+        <article class="metricCard medium">
+          <span>Medium</span>
+          <strong id="mediumCount">0</strong>
+        </article>
+        <article class="metricCard low">
+          <span>Low</span>
+          <strong id="lowCount">0</strong>
+        </article>
+        <article class="metricCard total">
+          <span>Visible</span>
+          <strong id="visibleCount">0</strong>
+        </article>
+      </section>
+
+      <section class="layout">
+        <article class="panel listPanel">
+          <div class="sectionHeader">
+            <div>
+              <p class="eyebrow">Diagnostic history</p>
+              <h2>Events</h2>
+            </div>
+            <span id="filterSummary" class="filterSummary">High + medium</span>
+          </div>
+          <div id="logList" class="logList"></div>
+          <p id="emptyState" class="empty">No logs match the current filters.</p>
+        </article>
+
+        <aside class="panel detailPanel">
+          <div class="sectionHeader">
+            <div>
+              <p class="eyebrow">Selected event</p>
+              <h2 id="detailTitle">Details</h2>
+            </div>
+          </div>
+          <pre id="detailJson">Select a log entry.</pre>
+        </aside>
+      </section>
+    </main>
+    <script src="logs.js"></script>
+  </body>
+</html>

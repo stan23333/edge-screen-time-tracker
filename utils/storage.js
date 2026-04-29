@@ -1,4 +1,6 @@
 (function attachStorageUtils(global) {
+  const MAX_DIAGNOSTIC_LOGS = 1000;
+
   const DEFAULT_STATE = {
     activeSession: null,
     focusedWindowId: null,
@@ -159,10 +161,62 @@
     await set({ analysisReports });
   }
 
+  function safeText(value, fallback = "") {
+    return String(value ?? fallback).trim();
+  }
+
+  function normalizeDiagnosticLog(entry = {}) {
+    const now = Date.now();
+    return {
+      id: safeText(entry.id) || (global.crypto?.randomUUID ? crypto.randomUUID() : `${now}-${Math.random().toString(16).slice(2)}`),
+      createdAt: Number.isFinite(Number(entry.createdAt)) ? Number(entry.createdAt) : now,
+      level: safeText(entry.level, "info") || "info",
+      priority: safeText(entry.priority, "low") || "low",
+      source: safeText(entry.source, "background") || "background",
+      category: safeText(entry.category, "program") || "program",
+      operation: safeText(entry.operation, "unknown") || "unknown",
+      message: safeText(entry.message, "No message.") || "No message.",
+      ...(entry.domain ? { domain: safeText(entry.domain) } : {}),
+      ...(entry.url ? { url: safeText(entry.url) } : {}),
+      ...(entry.model ? { model: safeText(entry.model) } : {}),
+      ...(entry.provider ? { provider: safeText(entry.provider) } : {}),
+      ...(entry.endpoint ? { endpoint: safeText(entry.endpoint) } : {}),
+      ...(entry.status !== undefined && entry.status !== null ? { status: entry.status } : {}),
+      ...(entry.summaryId ? { summaryId: safeText(entry.summaryId) } : {}),
+      ...(entry.visitId ? { visitId: safeText(entry.visitId) } : {}),
+      ...(entry.reportId ? { reportId: safeText(entry.reportId) } : {}),
+      ...(entry.details !== undefined ? { details: entry.details } : {}),
+      ...(entry.error !== undefined ? { error: entry.error } : {})
+    };
+  }
+
+  async function getDiagnosticLogs() {
+    const { diagnosticLogs = [] } = await get({ diagnosticLogs: [] });
+    return Array.isArray(diagnosticLogs) ? diagnosticLogs : [];
+  }
+
+  async function setDiagnosticLogs(diagnosticLogs) {
+    await set({ diagnosticLogs: (Array.isArray(diagnosticLogs) ? diagnosticLogs : []).slice(0, MAX_DIAGNOSTIC_LOGS) });
+  }
+
+  async function addDiagnosticLog(entry) {
+    const logs = await getDiagnosticLogs();
+    const log = normalizeDiagnosticLog(entry);
+    await setDiagnosticLogs([log, ...logs].slice(0, MAX_DIAGNOSTIC_LOGS));
+    return log;
+  }
+
+  async function clearDiagnosticLogs() {
+    await set({ diagnosticLogs: [] });
+  }
+
   global.StorageUtils = {
+    addDiagnosticLog,
+    clearDiagnosticLogs,
     get,
     getAnalysisReports,
     getDailyStats,
+    getDiagnosticLogs,
     getPageSummaries,
     getSettings,
     getState,
@@ -170,6 +224,7 @@
     set,
     setAnalysisReports,
     setDailyStats,
+    setDiagnosticLogs,
     setPageSummaries,
     setSettings,
     setVisitEvents
