@@ -8,25 +8,40 @@ Web Screen Time Tracker 是一个 Microsoft Edge / Chromium Manifest V3 浏览�
 
 ## 截图
 
-更多截图见 [`docs/screenshots/`](docs/screenshots/)。
+每个主要页面展示一张代表截图。Analysis 报告会在浏览器内直接进行 Markdown 在线渲染，支持标题、列表、表格、行内代码和强调样式。更多截图规范见 [`docs/SCREENSHOTS.md`](docs/SCREENSHOTS.md)。
 
-### Popup
-
-<p align="center">
-  <img src="docs/screenshots/popup2.png" alt="Popup 截图" width="320" />
-</p>
-
-### Dashboard
-
-<p align="center">
-  <img src="docs/screenshots/dashboard.jpeg" alt="Dashboard 截图" width="560" />
-</p>
-
-### Records
-
-<p align="center">
-  <img src="docs/screenshots/records.jpeg" alt="Records 截图" width="560" />
-</p>
+<table>
+  <tr>
+    <td width="38%" valign="top">
+      <strong>Popup</strong><br>
+      <img src="docs/screenshots/popup.png" alt="Popup 截图" width="320" />
+    </td>
+    <td width="62%" valign="top">
+      <strong>Dashboard</strong><br>
+      <img src="docs/screenshots/dashboard.jpeg" alt="Dashboard 截图" width="100%" />
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>Records</strong><br>
+      <img src="docs/screenshots/records.jpeg" alt="Records 截图" width="100%" />
+    </td>
+    <td width="50%" valign="top">
+      <strong>Analysis with Markdown Preview</strong><br>
+      <img src="docs/screenshots/analysis.jpeg" alt="带 Markdown 渲染报告的 Analysis 截图" width="100%" />
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>Logs</strong><br>
+      <img src="docs/screenshots/logs.jpeg" alt="Logs 截图" width="100%" />
+    </td>
+    <td width="50%" valign="top">
+      <strong>Settings</strong><br>
+      <img src="docs/screenshots/settings.jpeg" alt="Settings 截图" width="100%" />
+    </td>
+  </tr>
+</table>
 
 ## 核心功能
 
@@ -37,7 +52,7 @@ Web Screen Time Tracker 是一个 Microsoft Edge / Chromium Manifest V3 浏览�
 - Dashboard 展示 active share、open/active 对比、热力图和站点详情。
 - Records 查看访问记录、Summary JSON、模型状态和 token usage。
 - Settings 配置模型供应商、提示词、API 测试、忽略域名、本地归档、WebDAV 和导出。
-- Analysis 生成日/周/月行为报告，支持 Markdown 预览、Evidence、Trend 和 Frequent themes。
+- Analysis 生成日/周/月行为报告，支持浏览器内 Markdown 在线渲染、Evidence、Trend 和 Frequent themes。
 - 通过 OpenAI-compatible chat completions API 自动生成页面摘要。
 - 对 DOM 文本抽取失败的 blocked 页面支持截图 fallback。
 - 支持本地归档 records 和 analysis reports，并可选镜像备份到 WebDAV。
@@ -108,7 +123,7 @@ Analysis 页面可以生成日、周、月行为报告，输入包括：
 - 摘要 evidence level 和 capture method
 - 供应商返回的 token usage
 
-报告以 Markdown 方式预览，支持标题、列表、代码块、行内代码、加粗和表格。Evidence 和 Trend 图表位于报告列表上方，Frequent themes 作为全宽可视化区域展示。
+报告会在 Analysis 页面内进行 Markdown 在线渲染，支持标题、列表、代码块、行内代码、加粗和表格。Evidence 和 Trend 图表位于报告列表上方，Frequent themes 作为全宽可视化区域展示。
 
 analysis model 可以和 summary model 分开配置，因此可以用更便宜/更快的模型做页面摘要，用更强的模型做长期行为分析。
 
@@ -222,7 +237,8 @@ edge-screen-time-tracker/
 ├── assets/
 ├── docs/
 │   ├── assets/
-│   └── screenshots/
+│   ├── screenshots/
+│   └── SCREENSHOTS.md
 ├── README.md
 └── README.zh-CN.md
 ```

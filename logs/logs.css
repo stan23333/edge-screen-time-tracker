@@ -202,6 +202,10 @@ label {
   background: var(--red-soft);
 }
 
+.confirmBar[hidden] {
+  display: none;
+}
+
 .confirmBar span {
   margin-right: auto;
   color: var(--red);

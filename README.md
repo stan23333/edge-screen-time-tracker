@@ -8,25 +8,40 @@ It is built for people who use the browser as a daily workspace: reading, search
 
 ## Screenshots
 
-More screenshots are available in [`docs/screenshots/`](docs/screenshots/).
+One representative screenshot is shown for each primary page. Analysis reports are rendered directly in the browser as Markdown, including headings, lists, tables, inline code, and emphasis. More capture notes are available in [`docs/SCREENSHOTS.md`](docs/SCREENSHOTS.md).
 
-### Popup
-
-<p align="center">
-  <img src="docs/screenshots/popup2.png" alt="Popup screenshot" width="320" />
-</p>
-
-### Dashboard
-
-<p align="center">
-  <img src="docs/screenshots/dashboard.jpeg" alt="Dashboard screenshot" width="560" />
-</p>
-
-### Records
-
-<p align="center">
-  <img src="docs/screenshots/records.jpeg" alt="Records screenshot" width="560" />
-</p>
+<table>
+  <tr>
+    <td width="38%" valign="top">
+      <strong>Popup</strong><br>
+      <img src="docs/screenshots/popup.png" alt="Popup screenshot" width="320" />
+    </td>
+    <td width="62%" valign="top">
+      <strong>Dashboard</strong><br>
+      <img src="docs/screenshots/dashboard.jpeg" alt="Dashboard screenshot" width="100%" />
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>Records</strong><br>
+      <img src="docs/screenshots/records.jpeg" alt="Records screenshot" width="100%" />
+    </td>
+    <td width="50%" valign="top">
+      <strong>Analysis with Markdown Preview</strong><br>
+      <img src="docs/screenshots/analysis.jpeg" alt="Analysis screenshot with Markdown-rendered report" width="100%" />
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>Logs</strong><br>
+      <img src="docs/screenshots/logs.jpeg" alt="Logs screenshot" width="100%" />
+    </td>
+    <td width="50%" valign="top">
+      <strong>Settings</strong><br>
+      <img src="docs/screenshots/settings.jpeg" alt="Settings screenshot" width="100%" />
+    </td>
+  </tr>
+</table>
 
 ## Core Features
 
@@ -37,7 +52,7 @@ More screenshots are available in [`docs/screenshots/`](docs/screenshots/).
 - Dashboard for active share, open/active comparison, heatmaps, and per-site details.
 - Records page for browsing history, summary JSON, model status, and token usage.
 - Settings page for provider presets, prompts, API tests, ignored domains, local archive, WebDAV, and export.
-- Analysis page for day/week/month behavior reports with Markdown preview, evidence charts, trends, and frequent themes.
+- Analysis page for day/week/month behavior reports with in-browser Markdown rendering, evidence charts, trends, and frequent themes.
 - Automatic page summaries through OpenAI-compatible chat completion APIs.
 - Screenshot fallback for pages where DOM text capture is blocked.
 - Local archive for records and analysis reports, with optional WebDAV mirror backup.
@@ -108,7 +123,7 @@ The Analysis page generates day, week, and month reports from:
 - summary evidence levels and capture methods
 - model token usage where available
 
-Reports are rendered as Markdown and support headings, lists, code blocks, inline code, bold text, and tables. Evidence and trend charts are shown above the report list, and frequent themes are shown as a full-width visual section.
+Reports are rendered online in the Analysis page as Markdown and support headings, lists, code blocks, inline code, bold text, and tables. Evidence and trend charts are shown above the report list, and frequent themes are shown as a full-width visual section.
 
 The analysis model can be configured separately from the summary model, so a cheaper model can summarize pages while a stronger model analyzes longer-term behavior.
 
@@ -222,7 +237,8 @@ edge-screen-time-tracker/
 ├── assets/
 ├── docs/
 │   ├── assets/
-│   └── screenshots/
+│   ├── screenshots/
+│   └── SCREENSHOTS.md
 ├── README.md
 └── README.zh-CN.md
 ```
