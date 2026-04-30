@@ -12,6 +12,24 @@ const MAX_DIAGNOSTIC_LOGS = 1000;
 const LOCAL_ARCHIVE_DB = "web-screen-time-tracker-local-archive";
 const LOCAL_ARCHIVE_STORE = "handles";
 const LOCAL_ARCHIVE_HANDLE_KEY = "directory";
+const ARCHIVE_KIND = {
+  RECORD: "record",
+  ANALYSIS: "analysis"
+};
+const ARCHIVE_STATUS = {
+  PENDING: "pending",
+  DONE: "done",
+  SKIPPED: "skipped",
+  MISSING: "missing",
+  DELETED: "deleted",
+  ERROR: "error"
+};
+const ARCHIVE_RETRYABLE_LOCAL_STATUSES = new Set([
+  ARCHIVE_STATUS.PENDING,
+  ARCHIVE_STATUS.SKIPPED,
+  ARCHIVE_STATUS.MISSING,
+  ARCHIVE_STATUS.ERROR
+]);
 const IGNORE_DOMAIN_MENU = "ignore-current-website";
 const METRICS = {
   ACTIVE: "activeSeconds",
@@ -2725,40 +2743,17 @@ async function runAnalysis(period, endDateKey) {
     analysisReports[period].unshift(report);
     await StorageUtils.setAnalysisReports(analysisReports);
 
-    const backup = {};
-    try {
-      const localAnalysis = await archiveAnalysisReportToLocal(report);
-      backup.local = localAnalysis;
-      report.backup = backup;
-      await StorageUtils.setAnalysisReports(analysisReports);
-      backup.records = {
-        ...(backup.records || {}),
-        local: await archiveDailyRecordsForDateKeys(keys)
-      };
-    } catch (error) {
-      backup.local = {
-        status: "error",
-        error: error.message || "Local archive failed."
-      };
-      await addDiagnosticLog({
-        level: "error",
-        priority: "medium",
-        source: "analysis",
-        category: "storage",
-        operation: "archive_analysis_local",
-        message: error.message || "Local archive failed.",
-        reportId: report.id,
-        details: {
-          period,
-          startDate: report.startDate,
-          endDate: report.endDate
-        },
-        error
-      });
-    }
+    const backup = await archiveAnalysisReportAndRecordsToLocal(report, keys, {
+      source: "analysis",
+      trigger: "run_analysis"
+    });
+    report.backup = backup;
+    await StorageUtils.setAnalysisReports(analysisReports);
+
     try {
       const remoteAnalysis = await backupAnalysisReportToWebdav(report);
       backup.remote = remoteAnalysis;
+      await upsertAnalysisArchiveRemote(report, remoteAnalysis);
       backup.records = {
         ...(backup.records || {}),
         remote: await backupDailyRecordsForDateKeys(keys)
@@ -2768,6 +2763,7 @@ async function runAnalysis(period, endDateKey) {
         status: "error",
         error: error.message || "WebDAV backup failed."
       };
+      await upsertAnalysisArchiveRemote(report, backup.remote);
       await addDiagnosticLog({
         level: "error",
         priority: "medium",
@@ -2789,6 +2785,16 @@ async function runAnalysis(period, endDateKey) {
     }
     report.backup = backup;
     await StorageUtils.setAnalysisReports(analysisReports);
+    await recordArchiveLastRun("run_analysis", flattenBackupResultForArchiveRun({
+      local: {
+        records: backup.records?.local || { results: [] },
+        analysis: backup.local ? [{ ...backup.local, reportId: report.id }] : []
+      },
+      remote: {
+        records: backup.records?.remote || { results: [] },
+        analysis: backup.remote ? [{ ...backup.remote, reportId: report.id }] : []
+      }
+    }));
     setLastAnalysisStatus("done", `${period} analysis completed.`, {
       period,
       endDateKey,
@@ -2875,16 +2881,7 @@ function localJoin(...parts) {
     .join("/");
 }
 
-function cleanArchiveFolderName(value) {
-  return String(value || "browser-tracker")
-    .replace(/^\/+|\/+$/g, "")
-    .replace(/\.\./g, "")
-    .trim() || "browser-tracker";
-}
-
-function localArchiveRoot(settings) {
-  return cleanArchiveFolderName(settings.localArchive?.downloadsFolder);
-}
+const LOCAL_ARCHIVE_FOLDER_REQUIRED_MESSAGE = "Choose a local archive folder in Settings before backup can write files.";
 
 function openLocalArchiveDb() {
   return new Promise((resolve, reject) => {
@@ -2914,9 +2911,7 @@ function archiveFolderPath(displayRoot, relativePath) {
 }
 
 function archiveResult(settings, mode, relativePath, backedUpAt = Date.now(), extra = {}) {
-  const root = mode === "directory"
-    ? settings.localArchive?.directoryName || "Selected folder"
-    : `Downloads/${localArchiveRoot(settings)}`;
+  const root = settings.localArchive?.directoryName || "Selected folder";
   return {
     status: extra.status || "done",
     mode,
@@ -2928,19 +2923,27 @@ function archiveResult(settings, mode, relativePath, backedUpAt = Date.now(), ex
   };
 }
 
-function dataUrlForText(text, contentType) {
-  return `data:${contentType};charset=utf-8,${encodeURIComponent(text)}`;
+function localArchiveDirectoryConfigured(settings) {
+  return settings.localArchive?.mode === "directory"
+    && Boolean(settings.localArchive?.directoryName || settings.localArchive?.directoryGrantedAt);
 }
 
-async function writeDownloadArchiveFile(settings, relativePath, text, contentType) {
-  const filename = localJoin(localArchiveRoot(settings), relativePath);
-  const downloadId = await chrome.downloads.download({
-    url: dataUrlForText(text, contentType),
-    filename,
-    conflictAction: "overwrite",
-    saveAs: false
-  });
-  return archiveResult(settings, "downloads", relativePath, Date.now(), { downloadId });
+function skippedLocalArchiveResult(relativePath, reason = LOCAL_ARCHIVE_FOLDER_REQUIRED_MESSAGE) {
+  return {
+    status: "skipped",
+    skipped: true,
+    mode: "directory",
+    backedUpAt: Date.now(),
+    relativePath,
+    displayPath: "",
+    folderPath: "",
+    reason
+  };
+}
+
+function isLocalArchiveUnavailableError(error) {
+  return error?.name === "NotAllowedError"
+    || /not available|permission|not allowed|denied/i.test(error?.message || "");
 }
 
 async function writeFileToDirectory(rootHandle, relativePath, text) {
@@ -2964,31 +2967,24 @@ async function writeDirectoryArchiveFile(settings, relativePath, text) {
     throw new Error("Local archive folder is not available.");
   }
 
-  const permission = await handle.queryPermission?.({ mode: "readwrite" });
-  if (permission && permission !== "granted") {
-    throw new Error("Local archive folder permission is not granted.");
-  }
-
   await writeFileToDirectory(handle, relativePath, text);
   return archiveResult(settings, "directory", relativePath);
 }
 
 async function writeLocalArchiveFile(relativePath, text, contentType) {
   const settings = await StorageUtils.getSettings();
-  if (settings.localArchive?.mode === "directory") {
-    try {
-      return await writeDirectoryArchiveFile(settings, relativePath, text, contentType);
-    } catch (error) {
-      const fallback = await writeDownloadArchiveFile(settings, relativePath, text, contentType);
-      return {
-        ...fallback,
-        status: "fallback",
-        fallbackReason: error.message || "Directory archive failed."
-      };
-    }
+  if (!localArchiveDirectoryConfigured(settings)) {
+    return skippedLocalArchiveResult(relativePath);
   }
 
-  return writeDownloadArchiveFile(settings, relativePath, text, contentType);
+  try {
+    return await writeDirectoryArchiveFile(settings, relativePath, text, contentType);
+  } catch (error) {
+    if (isLocalArchiveUnavailableError(error)) {
+      return skippedLocalArchiveResult(relativePath, error.message || LOCAL_ARCHIVE_FOLDER_REQUIRED_MESSAGE);
+    }
+    throw error;
+  }
 }
 
 async function writeLocalArchiveJson(relativePath, payload) {
@@ -3012,6 +3008,250 @@ function analysisReportRelativePath(report) {
     ? report.endDate
     : `${report.startDate}_to_${report.endDate}`;
   return `analysis/${year}/${month}/${datePart}_${report.period}_${timeKey}_${id}.md`;
+}
+
+function archiveEntryId(kind, key) {
+  return `${kind}:${String(key || "").trim()}`;
+}
+
+function recordArchiveEntryId(dateKey) {
+  return archiveEntryId(ARCHIVE_KIND.RECORD, dateKey);
+}
+
+function analysisArchiveEntryId(reportId) {
+  return archiveEntryId(ARCHIVE_KIND.ANALYSIS, reportId);
+}
+
+function defaultLocalArchiveState(relativePath, reason = "") {
+  return {
+    status: ARCHIVE_STATUS.PENDING,
+    relativePath,
+    displayPath: "",
+    folderPath: "",
+    backedUpAt: 0,
+    deletedAt: 0,
+    error: "",
+    reason: reason || LOCAL_ARCHIVE_FOLDER_REQUIRED_MESSAGE,
+    updatedAt: Date.now()
+  };
+}
+
+function defaultRemoteArchiveState(relativePath, settings = null) {
+  if (!settings?.webdav?.url) {
+    return {
+      status: ARCHIVE_STATUS.SKIPPED,
+      relativePath,
+      remotePath: "",
+      remoteUrl: "",
+      backedUpAt: 0,
+      deletedAt: 0,
+      error: "",
+      reason: "WebDAV URL is not configured.",
+      updatedAt: Date.now()
+    };
+  }
+
+  const location = remoteBackupLocation(settings, relativePath);
+  return {
+    status: ARCHIVE_STATUS.PENDING,
+    relativePath,
+    remotePath: location.remotePath,
+    remoteUrl: location.remoteUrl,
+    backedUpAt: 0,
+    deletedAt: 0,
+    error: "",
+    reason: "",
+    updatedAt: Date.now()
+  };
+}
+
+function localStatusFromArchiveResult(result = {}) {
+  if (result.status === ARCHIVE_STATUS.DONE) {
+    return ARCHIVE_STATUS.DONE;
+  }
+  if (result.status === ARCHIVE_STATUS.DELETED) {
+    return ARCHIVE_STATUS.DELETED;
+  }
+  if (result.status === ARCHIVE_STATUS.MISSING) {
+    return ARCHIVE_STATUS.MISSING;
+  }
+  if (result.status === ARCHIVE_STATUS.ERROR && !isLocalArchiveUnavailableError({ message: result.error || result.reason || "" })) {
+    return ARCHIVE_STATUS.ERROR;
+  }
+  return ARCHIVE_STATUS.PENDING;
+}
+
+function localStateFromArchiveResult(result = {}, relativePath = "") {
+  const status = localStatusFromArchiveResult(result);
+  return {
+    status,
+    relativePath: result.relativePath || relativePath,
+    displayPath: status === ARCHIVE_STATUS.DONE || status === ARCHIVE_STATUS.DELETED ? result.displayPath || "" : result.displayPath || "",
+    folderPath: status === ARCHIVE_STATUS.DONE || status === ARCHIVE_STATUS.DELETED ? result.folderPath || "" : result.folderPath || "",
+    backedUpAt: result.backedUpAt || 0,
+    deletedAt: result.deletedAt || 0,
+    error: status === ARCHIVE_STATUS.ERROR ? result.error || "Local archive failed." : "",
+    reason: status === ARCHIVE_STATUS.PENDING ? result.reason || result.error || LOCAL_ARCHIVE_FOLDER_REQUIRED_MESSAGE : result.reason || "",
+    updatedAt: Date.now()
+  };
+}
+
+function remoteStatusFromArchiveResult(result = {}) {
+  if (result.status === ARCHIVE_STATUS.DELETED) {
+    return ARCHIVE_STATUS.DELETED;
+  }
+  if (result.status === ARCHIVE_STATUS.ERROR || result.error) {
+    return ARCHIVE_STATUS.ERROR;
+  }
+  if (result.status === ARCHIVE_STATUS.SKIPPED || result.skipped) {
+    return ARCHIVE_STATUS.SKIPPED;
+  }
+  if (result.status === ARCHIVE_STATUS.DONE || result.remotePath || result.remoteUrl) {
+    return ARCHIVE_STATUS.DONE;
+  }
+  return ARCHIVE_STATUS.PENDING;
+}
+
+function remoteStateFromArchiveResult(result = {}, relativePath = "") {
+  const status = remoteStatusFromArchiveResult(result);
+  return {
+    status,
+    relativePath: result.relativePath || relativePath,
+    remotePath: result.remotePath || "",
+    remoteUrl: result.remoteUrl || "",
+    backedUpAt: result.backedUpAt || 0,
+    deletedAt: result.deletedAt || 0,
+    error: status === ARCHIVE_STATUS.ERROR ? result.error || "WebDAV backup failed." : "",
+    reason: status === ARCHIVE_STATUS.SKIPPED ? result.reason || "WebDAV URL is not configured." : result.reason || "",
+    updatedAt: Date.now()
+  };
+}
+
+function recordArchiveEntry(dateKey, settings = null) {
+  const relativePath = dailyRecordRelativePath(dateKey);
+  const now = Date.now();
+  return {
+    id: recordArchiveEntryId(dateKey),
+    kind: ARCHIVE_KIND.RECORD,
+    title: `Record ${dateKey}`,
+    dateKey,
+    reportId: "",
+    period: "",
+    contentType: "application/json",
+    relativePath,
+    createdAt: now,
+    updatedAt: now,
+    local: defaultLocalArchiveState(relativePath),
+    remote: defaultRemoteArchiveState(relativePath, settings)
+  };
+}
+
+function analysisArchiveEntry(report, settings = null) {
+  const relativePath = analysisReportRelativePath(report);
+  return {
+    id: analysisArchiveEntryId(report.id),
+    kind: ARCHIVE_KIND.ANALYSIS,
+    title: `${report.period} analysis: ${report.startDate} to ${report.endDate}`,
+    dateKey: report.endDate || TimeUtils.dateKeyFromTimestamp(report.createdAt || Date.now()),
+    reportId: report.id,
+    period: report.period,
+    contentType: "text/markdown",
+    relativePath,
+    createdAt: report.createdAt || Date.now(),
+    updatedAt: Date.now(),
+    local: defaultLocalArchiveState(relativePath),
+    remote: defaultRemoteArchiveState(relativePath, settings)
+  };
+}
+
+function mergeArchiveEntry(previous = {}, next = {}) {
+  const now = Date.now();
+  return {
+    ...previous,
+    ...next,
+    id: next.id || previous.id,
+    local: {
+      ...(previous.local || {}),
+      ...(next.local || {})
+    },
+    remote: {
+      ...(previous.remote || {}),
+      ...(next.remote || {})
+    },
+    createdAt: previous.createdAt || next.createdAt || now,
+    updatedAt: now
+  };
+}
+
+async function upsertArchiveEntry(nextEntry) {
+  const archiveIndex = await StorageUtils.getArchiveIndex();
+  const previous = archiveIndex.entries[nextEntry.id] || {};
+  const entry = mergeArchiveEntry(previous, nextEntry);
+  archiveIndex.entries[entry.id] = entry;
+  archiveIndex.updatedAt = Date.now();
+  await StorageUtils.setArchiveIndex(archiveIndex);
+  return entry;
+}
+
+async function updateArchiveEntryState(entryId, patch) {
+  const archiveIndex = await StorageUtils.getArchiveIndex();
+  const previous = archiveIndex.entries[entryId] || { id: entryId };
+  const entry = mergeArchiveEntry(previous, patch);
+  archiveIndex.entries[entry.id] = entry;
+  archiveIndex.updatedAt = Date.now();
+  await StorageUtils.setArchiveIndex(archiveIndex);
+  return entry;
+}
+
+async function syncAnalysisReportBackup(reportId, patch) {
+  const analysisReports = await StorageUtils.getAnalysisReports();
+  const match = findAnalysisReport(analysisReports, reportId);
+  if (!match) {
+    return null;
+  }
+  match.report.backup = {
+    ...(match.report.backup || {}),
+    ...patch
+  };
+  analysisReports[match.period][match.index] = match.report;
+  await StorageUtils.setAnalysisReports(analysisReports);
+  return match.report;
+}
+
+async function upsertRecordArchiveLocal(dateKey, result) {
+  const settings = await StorageUtils.getSettings();
+  const base = recordArchiveEntry(dateKey, settings);
+  return upsertArchiveEntry({
+    ...base,
+    local: localStateFromArchiveResult(result, base.relativePath)
+  });
+}
+
+async function upsertRecordArchiveRemote(dateKey, result) {
+  const settings = await StorageUtils.getSettings();
+  const base = recordArchiveEntry(dateKey, settings);
+  return upsertArchiveEntry({
+    ...base,
+    remote: remoteStateFromArchiveResult(result, base.relativePath)
+  });
+}
+
+async function upsertAnalysisArchiveLocal(report, result) {
+  const settings = await StorageUtils.getSettings();
+  const base = analysisArchiveEntry(report, settings);
+  return upsertArchiveEntry({
+    ...base,
+    local: localStateFromArchiveResult(result, base.relativePath)
+  });
+}
+
+async function upsertAnalysisArchiveRemote(report, result) {
+  const settings = await StorageUtils.getSettings();
+  const base = analysisArchiveEntry(report, settings);
+  return upsertArchiveEntry({
+    ...base,
+    remote: remoteStateFromArchiveResult(result, base.relativePath)
+  });
 }
 
 function remoteBackupLocation(settings, relativePath, backedUpAt = Date.now()) {
@@ -3167,6 +3407,40 @@ async function putWebdavText(path, text, contentType = "text/markdown; charset=u
   };
 }
 
+async function deleteWebdavPath(remotePath) {
+  const settings = await StorageUtils.getSettings();
+  if (!remotePath) {
+    return { status: "skipped", skipped: true, reason: "No remote archive path." };
+  }
+  if (!settings.webdav.url) {
+    return { status: "skipped", skipped: true, reason: "WebDAV URL is not configured.", remotePath };
+  }
+
+  const { baseUrl } = webdavBaseAndPath(settings);
+  const headers = webdavHeaders(settings);
+  const response = await fetch(`${baseUrl}/${remotePath}`, {
+    method: "DELETE",
+    headers
+  });
+
+  if (!response.ok && response.status !== 404) {
+    throw await webdavResponseError("WebDAV delete failed", response, {
+      stage: "delete_archive",
+      method: "DELETE",
+      path: remotePath,
+      endpoint: `${baseUrl}/${remotePath}`
+    });
+  }
+
+  return {
+    status: "deleted",
+    deletedAt: Date.now(),
+    remotePath,
+    remoteUrl: `${baseUrl}/${remotePath}`,
+    alreadyMissing: response.status === 404
+  };
+}
+
 async function ensureWebdavDirectories(baseUrl, path, settings) {
   const parts = String(path).split("/").filter(Boolean).slice(0, -1);
   let cursor = "";
@@ -3218,21 +3492,42 @@ async function archiveDailyRecordsForDateKeys(dateKeys) {
   const results = [];
   const stores = await collectBackupStores();
   for (const dateKey of [...new Set(dateKeys || [])]) {
-    results.push(await archiveDailyRecordToLocal(dateKey, stores));
+    const result = await archiveDailyRecordToLocal(dateKey, stores);
+    await upsertRecordArchiveLocal(dateKey, result);
+    results.push(result);
   }
-  return { skipped: false, results };
+  const skipped = results.length > 0 && results.every((item) => item?.status === "skipped");
+  return {
+    status: skipped ? "skipped" : "done",
+    skipped,
+    reason: skipped ? results[0]?.reason || LOCAL_ARCHIVE_FOLDER_REQUIRED_MESSAGE : "",
+    results
+  };
 }
 
 async function backupDailyRecordsForDateKeys(dateKeys) {
   const settings = await StorageUtils.getSettings();
+  const normalizedDateKeys = [...new Set(dateKeys || [])];
   if (!settings.webdav.url) {
-    return { skipped: true, reason: "WebDAV URL is not configured.", results: [] };
+    const results = normalizedDateKeys.map((dateKey) => ({
+      status: "skipped",
+      skipped: true,
+      reason: "WebDAV URL is not configured.",
+      dateKey,
+      relativePath: dailyRecordRelativePath(dateKey)
+    }));
+    for (const result of results) {
+      await upsertRecordArchiveRemote(result.dateKey, result);
+    }
+    return { skipped: true, reason: "WebDAV URL is not configured.", results };
   }
 
   const results = [];
   const stores = await collectBackupStores();
-  for (const dateKey of [...new Set(dateKeys || [])]) {
-    results.push(await backupDailyRecordToWebdav(dateKey, stores));
+  for (const dateKey of normalizedDateKeys) {
+    const result = await backupDailyRecordToWebdav(dateKey, stores);
+    await upsertRecordArchiveRemote(dateKey, result);
+    results.push(result);
   }
   return { skipped: false, results };
 }
@@ -3256,11 +3551,615 @@ async function archiveAnalysisReportToLocal(report) {
   return writeLocalArchiveText(relativePath, buildAnalysisMarkdown(report), "text/markdown");
 }
 
+async function archiveAnalysisReportAndRecordsToLocal(report, dateKeys, options = {}) {
+  const source = options.source || "analysis";
+  const trigger = options.trigger || "";
+  const backup = {};
+
+  try {
+    backup.local = await archiveAnalysisReportToLocal(report);
+    await upsertAnalysisArchiveLocal(report, backup.local);
+  } catch (error) {
+    backup.local = { status: "error", error: error.message || "Local archive failed." };
+    await upsertAnalysisArchiveLocal(report, backup.local);
+    await addDiagnosticLog({
+      level: "error",
+      priority: "medium",
+      source,
+      category: "storage",
+      operation: "archive_analysis_local",
+      message: error.message || "Local archive failed.",
+      reportId: report.id,
+      details: {
+        period: report.period,
+        startDate: report.startDate,
+        endDate: report.endDate,
+        trigger
+      },
+      error
+    });
+  }
+
+  try {
+    backup.records = {
+      local: await archiveDailyRecordsForDateKeys(dateKeys)
+    };
+  } catch (error) {
+    backup.records = {
+      ...(backup.records || {}),
+      local: { status: "error", error: error.message || "Local archive failed.", results: [] }
+    };
+    await addDiagnosticLog({
+      level: "error",
+      priority: "medium",
+      source,
+      category: "storage",
+      operation: "archive_records_local",
+      message: error.message || "Local archive failed.",
+      reportId: report.id,
+      details: {
+        period: report.period,
+        startDate: report.startDate,
+        endDate: report.endDate,
+        dateKeys: uniqueDateKeys(dateKeys),
+        trigger
+      },
+      error
+    });
+  }
+
+  return backup;
+}
+
 function reportsForDateKeys(reports, dateKeys) {
   const allowed = new Set(dateKeys || []);
   return Object.values(reports || {})
     .flat()
     .filter((report) => allowed.has(report.endDate) || allowed.has(TimeUtils.dateKeyFromTimestamp(report.createdAt)));
+}
+
+function findAnalysisReport(analysisReports, reportId) {
+  for (const [period, items] of Object.entries(analysisReports || {})) {
+    const index = (items || []).findIndex((report) => report.id === reportId);
+    if (index >= 0) {
+      return { period, index, report: items[index] };
+    }
+  }
+  return null;
+}
+
+async function deleteAnalysisArchive(reportId, localResult = null) {
+  const analysisReports = await StorageUtils.getAnalysisReports();
+  const match = findAnalysisReport(analysisReports, reportId);
+  if (!match) {
+    throw new Error("Analysis report was not found.");
+  }
+
+  const backup = match.report.backup || {};
+  const nextBackup = {
+    ...backup
+  };
+
+  if (localResult) {
+    nextBackup.local = {
+      ...(backup.local || {}),
+      ...localResult
+    };
+  }
+
+  try {
+    nextBackup.remote = await deleteWebdavPath(backup.remote?.remotePath);
+  } catch (error) {
+    nextBackup.remote = {
+      ...(backup.remote || {}),
+      status: "error",
+      error: error.message || "WebDAV delete failed."
+    };
+    await addDiagnosticLog({
+      level: "error",
+      priority: "medium",
+      source: "analysis",
+      category: "external",
+      operation: "delete_analysis_archive_webdav",
+      message: error.message || "WebDAV delete failed.",
+      reportId,
+      endpoint: backup.remote?.remoteUrl || "",
+      status: error.status || null,
+      details: {
+        remotePath: backup.remote?.remotePath || "",
+        diagnostic: error.diagnostic || null
+      },
+      error
+    });
+  }
+
+  match.report.backup = nextBackup;
+  analysisReports[match.period][match.index] = match.report;
+  await StorageUtils.setAnalysisReports(analysisReports);
+  if (nextBackup.local) {
+    await upsertAnalysisArchiveLocal(match.report, nextBackup.local);
+  }
+  if (nextBackup.remote) {
+    await upsertAnalysisArchiveRemote(match.report, nextBackup.remote);
+  }
+
+  await addDiagnosticLog({
+    level: nextBackup.remote?.status === "error" || nextBackup.local?.status === "error" ? "warn" : "info",
+    priority: "medium",
+    source: "analysis",
+    category: "storage",
+    operation: "delete_analysis_archive",
+    message: "Analysis archive delete finished.",
+    reportId,
+    details: {
+      localStatus: nextBackup.local?.status || "",
+      localPath: nextBackup.local?.relativePath || "",
+      remoteStatus: nextBackup.remote?.status || "",
+      remotePath: nextBackup.remote?.remotePath || ""
+    }
+  });
+
+  return match.report;
+}
+
+async function deleteAnalysisArchiveFromPage(reportId) {
+  const analysisReports = await StorageUtils.getAnalysisReports();
+  const match = findAnalysisReport(analysisReports, reportId);
+  if (!match) {
+    throw new Error("Analysis report was not found.");
+  }
+
+  const settings = await StorageUtils.getSettings();
+  const base = analysisArchiveEntry(match.report, settings);
+  await upsertArchiveEntry({
+    ...base,
+    local: match.report.backup?.local
+      ? localStateFromArchiveResult(match.report.backup.local, base.relativePath)
+      : base.local,
+    remote: match.report.backup?.remote
+      ? remoteStateFromArchiveResult(match.report.backup.remote, base.relativePath)
+      : base.remote
+  });
+
+  await deleteArchiveEntries([base.id], "both");
+  const latestReports = await StorageUtils.getAnalysisReports();
+  const latest = findAnalysisReport(latestReports, reportId);
+  if (!latest) {
+    throw new Error("Analysis report was not found after archive delete.");
+  }
+  return latest.report;
+}
+
+async function removeFileFromDirectory(rootHandle, relativePath) {
+  const parts = String(relativePath || "").split("/").filter(Boolean);
+  const fileName = parts.pop();
+  if (!fileName) {
+    throw new Error("Local archive file path is missing.");
+  }
+
+  let directory = rootHandle;
+  for (const part of parts) {
+    directory = await directory.getDirectoryHandle(part);
+  }
+  await directory.removeEntry(fileName);
+}
+
+async function deleteLocalArchivePath(relativePath) {
+  const settings = await StorageUtils.getSettings();
+  if (!relativePath) {
+    return { status: "skipped", skipped: true, reason: "No local archive path." };
+  }
+  if (!localArchiveDirectoryConfigured(settings)) {
+    return {
+      status: "pending",
+      relativePath,
+      reason: LOCAL_ARCHIVE_FOLDER_REQUIRED_MESSAGE
+    };
+  }
+
+  try {
+    const handle = await getDirectoryHandle();
+    if (!handle) {
+      return {
+        status: "pending",
+        relativePath,
+        reason: "Local archive folder is not available. Reauthorize it in Settings."
+      };
+    }
+    await removeFileFromDirectory(handle, relativePath);
+    return archiveResult(settings, "directory", relativePath, Date.now(), {
+      status: "deleted",
+      deletedAt: Date.now()
+    });
+  } catch (error) {
+    if (error?.name === "NotFoundError") {
+      return archiveResult(settings, "directory", relativePath, Date.now(), {
+        status: "deleted",
+        deletedAt: Date.now(),
+        note: "File was already missing."
+      });
+    }
+    if (isLocalArchiveUnavailableError(error)) {
+      return {
+        status: "pending",
+        relativePath,
+        reason: error.message || "Local archive folder permission is not granted."
+      };
+    }
+    return {
+      status: "error",
+      relativePath,
+      error: error.message || "Local archive delete failed."
+    };
+  }
+}
+
+function mergeBackfilledArchiveEntry(existing, next) {
+  if (!existing) {
+    return next;
+  }
+
+  return {
+    ...next,
+    ...existing,
+    title: existing.title || next.title,
+    dateKey: existing.dateKey || next.dateKey,
+    reportId: existing.reportId || next.reportId,
+    period: existing.period || next.period,
+    contentType: existing.contentType || next.contentType,
+    relativePath: existing.relativePath || next.relativePath,
+    local: existing.local?.status === ARCHIVE_STATUS.DELETED
+      ? existing.local
+      : { ...(existing.local || {}), ...(next.local || {}) },
+    remote: existing.remote?.status === ARCHIVE_STATUS.DELETED
+      ? existing.remote
+      : { ...(existing.remote || {}), ...(next.remote || {}) },
+    createdAt: existing.createdAt || next.createdAt,
+    updatedAt: existing.updatedAt || next.updatedAt
+  };
+}
+
+function reconcileRemoteConfigState(existingRemote = null, baseRemote = null) {
+  if (!existingRemote) {
+    return baseRemote;
+  }
+  if (existingRemote.status === ARCHIVE_STATUS.DELETED || existingRemote.status === ARCHIVE_STATUS.DONE) {
+    return existingRemote;
+  }
+  if (baseRemote?.status === ARCHIVE_STATUS.PENDING
+    && existingRemote.status === ARCHIVE_STATUS.SKIPPED
+    && !existingRemote.remotePath) {
+    return baseRemote;
+  }
+  if (baseRemote?.status === ARCHIVE_STATUS.SKIPPED
+    && existingRemote.status === ARCHIVE_STATUS.PENDING
+    && !existingRemote.backedUpAt) {
+    return baseRemote;
+  }
+  return existingRemote;
+}
+
+async function getArchiveIndexWithBackfill() {
+  const settings = await StorageUtils.getSettings();
+  const archiveIndex = await StorageUtils.getArchiveIndex();
+  let changed = false;
+
+  const dailyStats = await StorageUtils.getDailyStats();
+  const visitEvents = await StorageUtils.getVisitEvents();
+  const pageSummaries = await StorageUtils.getPageSummaries();
+  for (const dateKey of uniqueDateKeys([
+    ...Object.keys(dailyStats || {}),
+    ...Object.keys(visitEvents || {}),
+    ...Object.keys(pageSummaries || {})
+  ])) {
+    const base = recordArchiveEntry(dateKey, settings);
+    const existing = archiveIndex.entries[base.id];
+    if (!existing) {
+      archiveIndex.entries[base.id] = base;
+      changed = true;
+    } else if (!existing.relativePath || !existing.local?.relativePath || !existing.remote?.relativePath) {
+      archiveIndex.entries[base.id] = mergeBackfilledArchiveEntry(existing, base);
+      changed = true;
+    } else {
+      const remote = reconcileRemoteConfigState(existing.remote, base.remote);
+      if (remote !== existing.remote) {
+        archiveIndex.entries[base.id] = {
+          ...existing,
+          remote,
+          updatedAt: Date.now()
+        };
+        changed = true;
+      }
+    }
+  }
+
+  const analysisReports = await StorageUtils.getAnalysisReports();
+  for (const report of Object.values(analysisReports || {}).flat()) {
+    if (!report?.id) {
+      continue;
+    }
+    const base = analysisArchiveEntry(report, settings);
+    const existing = archiveIndex.entries[base.id];
+    const next = { ...base };
+    if (report.backup?.local) {
+      next.local = localStateFromArchiveResult(report.backup.local, base.relativePath);
+    } else if (existing?.local) {
+      next.local = existing.local;
+    }
+    if (report.backup?.remote) {
+      next.remote = remoteStateFromArchiveResult(report.backup.remote, base.relativePath);
+    } else if (existing?.remote) {
+      next.remote = reconcileRemoteConfigState(existing.remote, base.remote);
+    }
+
+    const merged = mergeBackfilledArchiveEntry(existing, next);
+    if (!existing || JSON.stringify(existing) !== JSON.stringify(merged)) {
+      archiveIndex.entries[base.id] = merged;
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    archiveIndex.updatedAt = Date.now();
+    await StorageUtils.setArchiveIndex(archiveIndex);
+  }
+
+  return StorageUtils.getArchiveIndex();
+}
+
+async function localArchivePermissionStatus() {
+  const settings = await StorageUtils.getSettings();
+  if (!localArchiveDirectoryConfigured(settings)) {
+    return {
+      ok: false,
+      status: "not_selected",
+      reason: LOCAL_ARCHIVE_FOLDER_REQUIRED_MESSAGE
+    };
+  }
+
+  try {
+    const handle = await getDirectoryHandle();
+    if (!handle) {
+      return {
+        ok: false,
+        status: "needs_reauthorize",
+        name: settings.localArchive?.directoryName || "Selected folder",
+        reason: "Local archive folder handle is missing. Reauthorize it in Settings."
+      };
+    }
+    const permission = await handle.queryPermission?.({ mode: "readwrite" });
+    if (!permission || permission === "granted") {
+      return {
+        ok: true,
+        status: "granted",
+        name: settings.localArchive?.directoryName || handle.name || "Selected folder"
+      };
+    }
+    return {
+      ok: false,
+      status: "needs_reauthorize",
+      name: settings.localArchive?.directoryName || handle.name || "Selected folder",
+      reason: "Local archive folder permission needs reauthorization."
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: "write_failed",
+      name: settings.localArchive?.directoryName || "Selected folder",
+      reason: error.message || "Local archive permission check failed."
+    };
+  }
+}
+
+function normalizeArchiveTargets(targets) {
+  const values = Array.isArray(targets) ? targets : [targets || "both"];
+  const normalized = new Set();
+  for (const target of values) {
+    if (target === "both") {
+      normalized.add("local");
+      normalized.add("remote");
+    } else if (target === "local" || target === "remote") {
+      normalized.add(target);
+    }
+  }
+  return normalized.size ? normalized : new Set(["local", "remote"]);
+}
+
+async function writeArchiveEntryLocal(entry) {
+  let result = null;
+  try {
+    if (entry.kind === ARCHIVE_KIND.RECORD) {
+      result = await archiveDailyRecordToLocal(entry.dateKey);
+      await upsertRecordArchiveLocal(entry.dateKey, result);
+    } else {
+      const analysisReports = await StorageUtils.getAnalysisReports();
+      const match = findAnalysisReport(analysisReports, entry.reportId);
+      if (!match) {
+        throw new Error("Analysis report was not found.");
+      }
+      result = await archiveAnalysisReportToLocal(match.report);
+      await upsertAnalysisArchiveLocal(match.report, result);
+      await syncAnalysisReportBackup(match.report.id, { local: result });
+    }
+  } catch (error) {
+    result = {
+      status: "error",
+      relativePath: entry.relativePath,
+      error: error.message || "Local archive failed."
+    };
+    await updateArchiveEntryState(entry.id, {
+      local: localStateFromArchiveResult(result, entry.relativePath)
+    });
+    if (entry.kind === ARCHIVE_KIND.ANALYSIS && entry.reportId) {
+      await syncAnalysisReportBackup(entry.reportId, { local: result });
+    }
+  }
+
+  return archiveRunResult(entry.id, entry.kind, "local", {
+    ...result,
+    dateKey: entry.dateKey,
+    reportId: entry.reportId
+  });
+}
+
+async function uploadArchiveEntryRemote(entry) {
+  let result = null;
+  try {
+    if (entry.kind === ARCHIVE_KIND.RECORD) {
+      result = await backupDailyRecordToWebdav(entry.dateKey);
+      await upsertRecordArchiveRemote(entry.dateKey, result);
+    } else {
+      const analysisReports = await StorageUtils.getAnalysisReports();
+      const match = findAnalysisReport(analysisReports, entry.reportId);
+      if (!match) {
+        throw new Error("Analysis report was not found.");
+      }
+      result = await backupAnalysisReportToWebdav(match.report);
+      await upsertAnalysisArchiveRemote(match.report, result);
+      await syncAnalysisReportBackup(match.report.id, { remote: result });
+    }
+  } catch (error) {
+    result = {
+      status: "error",
+      relativePath: entry.relativePath,
+      error: error.message || "WebDAV backup failed."
+    };
+    await updateArchiveEntryState(entry.id, {
+      remote: remoteStateFromArchiveResult(result, entry.relativePath)
+    });
+    if (entry.kind === ARCHIVE_KIND.ANALYSIS && entry.reportId) {
+      await syncAnalysisReportBackup(entry.reportId, { remote: result });
+    }
+  }
+
+  return archiveRunResult(entry.id, entry.kind, "remote", {
+    ...result,
+    dateKey: entry.dateKey,
+    reportId: entry.reportId
+  });
+}
+
+async function deleteArchiveEntryLocal(entry) {
+  let result = null;
+  try {
+    result = await deleteLocalArchivePath(entry.relativePath || entry.local?.relativePath);
+  } catch (error) {
+    result = {
+      status: "error",
+      relativePath: entry.relativePath || entry.local?.relativePath || "",
+      error: error.message || "Local archive delete failed."
+    };
+  }
+  await updateArchiveEntryState(entry.id, {
+    local: localStateFromArchiveResult(result, entry.relativePath)
+  });
+  if (entry.kind === ARCHIVE_KIND.ANALYSIS && entry.reportId) {
+    await syncAnalysisReportBackup(entry.reportId, { local: result });
+  }
+  return archiveRunResult(entry.id, entry.kind, "local", {
+    ...result,
+    dateKey: entry.dateKey,
+    reportId: entry.reportId
+  });
+}
+
+async function deleteArchiveEntryRemote(entry) {
+  const settings = await StorageUtils.getSettings();
+  const fallbackLocation = settings.webdav?.url && entry.relativePath
+    ? remoteBackupLocation(settings, entry.relativePath)
+    : {};
+  let result = null;
+  try {
+    result = await deleteWebdavPath(entry.remote?.remotePath || fallbackLocation.remotePath || "");
+  } catch (error) {
+    result = {
+      status: "error",
+      relativePath: entry.relativePath || entry.remote?.relativePath || "",
+      remotePath: entry.remote?.remotePath || fallbackLocation.remotePath || "",
+      remoteUrl: entry.remote?.remoteUrl || fallbackLocation.remoteUrl || "",
+      error: error.message || "WebDAV delete failed."
+    };
+  }
+  await updateArchiveEntryState(entry.id, {
+    remote: remoteStateFromArchiveResult(result, entry.relativePath)
+  });
+  if (entry.kind === ARCHIVE_KIND.ANALYSIS && entry.reportId) {
+    await syncAnalysisReportBackup(entry.reportId, { remote: result });
+  }
+  return archiveRunResult(entry.id, entry.kind, "remote", {
+    ...result,
+    dateKey: entry.dateKey,
+    reportId: entry.reportId
+  });
+}
+
+async function retryArchiveEntries(entryIds = [], targets = "both", trigger = "retry") {
+  const archiveIndex = await getArchiveIndexWithBackfill();
+  const targetSet = normalizeArchiveTargets(targets);
+  const ids = (Array.isArray(entryIds) && entryIds.length ? entryIds : Object.keys(archiveIndex.entries))
+    .filter((entryId) => archiveIndex.entries[entryId]);
+  const results = [];
+
+  for (const entryId of ids) {
+    const entry = archiveIndex.entries[entryId];
+    if (targetSet.has("local")) {
+      results.push(await writeArchiveEntryLocal(entry));
+    }
+    if (targetSet.has("remote")) {
+      results.push(await uploadArchiveEntryRemote(entry));
+    }
+  }
+
+  await recordArchiveLastRun(trigger, results);
+  return {
+    ok: true,
+    results,
+    archiveIndex: await getArchiveIndexWithBackfill(),
+    archiveLastRun: await StorageUtils.getArchiveLastRun()
+  };
+}
+
+async function deleteArchiveEntries(entryIds = [], targets = "both") {
+  const archiveIndex = await getArchiveIndexWithBackfill();
+  const targetSet = normalizeArchiveTargets(targets);
+  const ids = (Array.isArray(entryIds) ? entryIds : [])
+    .filter((entryId) => archiveIndex.entries[entryId]);
+  const results = [];
+
+  for (const entryId of ids) {
+    const entry = archiveIndex.entries[entryId];
+    if (targetSet.has("local")) {
+      results.push(await deleteArchiveEntryLocal(entry));
+    }
+    if (targetSet.has("remote")) {
+      results.push(await deleteArchiveEntryRemote(entry));
+    }
+  }
+
+  await recordArchiveLastRun("delete_archive", results);
+  return {
+    ok: true,
+    results,
+    archiveIndex: await getArchiveIndexWithBackfill(),
+    archiveLastRun: await StorageUtils.getArchiveLastRun()
+  };
+}
+
+async function flushLocalArchivePending() {
+  const archiveIndex = await getArchiveIndexWithBackfill();
+  const entryIds = Object.values(archiveIndex.entries)
+    .filter((entry) => entry.local?.status !== ARCHIVE_STATUS.DELETED)
+    .filter((entry) => ARCHIVE_RETRYABLE_LOCAL_STATUSES.has(entry.local?.status || ARCHIVE_STATUS.PENDING))
+    .map((entry) => entry.id);
+  return retryArchiveEntries(entryIds, "local", "flush_local_pending");
+}
+
+async function getArchiveStatus() {
+  return {
+    localArchive: await localArchivePermissionStatus(),
+    archiveLastRun: await StorageUtils.getArchiveLastRun(),
+    autoBackup: await getAutoBackupStatus()
+  };
 }
 
 function uniqueDateKeys(dateKeys) {
@@ -3277,6 +4176,65 @@ function currentWeekDateKeys() {
     dateKeys.push(TimeUtils.dateKeyFromTimestamp(cursor));
   }
   return dateKeys;
+}
+
+function archiveRunResult(entryId, kind, target, item = {}) {
+  const status = target === "local"
+    ? localStatusFromArchiveResult(item)
+    : remoteStatusFromArchiveResult(item);
+  return {
+    entryId,
+    kind,
+    target,
+    status,
+    dateKey: item.dateKey || "",
+    reportId: item.reportId || "",
+    path: item.displayPath || item.remotePath || item.relativePath || "",
+    message: item.error || item.reason || ""
+  };
+}
+
+function flattenBackupResultForArchiveRun(result = {}) {
+  const rows = [];
+  for (const item of result.local?.records?.results || []) {
+    rows.push(archiveRunResult(recordArchiveEntryId(item.dateKey), ARCHIVE_KIND.RECORD, "local", item));
+  }
+  for (const item of result.remote?.records?.results || []) {
+    rows.push(archiveRunResult(recordArchiveEntryId(item.dateKey), ARCHIVE_KIND.RECORD, "remote", item));
+  }
+  for (const item of result.local?.analysis || []) {
+    rows.push(archiveRunResult(analysisArchiveEntryId(item.reportId), ARCHIVE_KIND.ANALYSIS, "local", item));
+  }
+  for (const item of result.remote?.analysis || []) {
+    rows.push(archiveRunResult(analysisArchiveEntryId(item.reportId), ARCHIVE_KIND.ANALYSIS, "remote", item));
+  }
+  return rows.filter((row) => row.entryId && !row.entryId.endsWith(":"));
+}
+
+function summarizeArchiveRunResults(results = []) {
+  const summary = {
+    done: 0,
+    skipped: 0,
+    pending: 0,
+    error: 0,
+    deleted: 0,
+    missing: 0
+  };
+  for (const item of results) {
+    if (Object.prototype.hasOwnProperty.call(summary, item.status)) {
+      summary[item.status] += 1;
+    }
+  }
+  return summary;
+}
+
+async function recordArchiveLastRun(trigger, results) {
+  await StorageUtils.setArchiveLastRun({
+    at: Date.now(),
+    trigger,
+    summary: summarizeArchiveRunResults(results),
+    results
+  });
 }
 
 async function backupDateKeys(dateKeys, options = {}) {
@@ -3331,10 +4289,12 @@ async function backupDateKeys(dateKeys, options = {}) {
     report.backup = report.backup || {};
     try {
       report.backup.local = await archiveAnalysisReportToLocal(report);
-      local.analysis.push(report.backup.local);
+      await upsertAnalysisArchiveLocal(report, report.backup.local);
+      local.analysis.push({ ...report.backup.local, reportId: report.id });
     } catch (error) {
       report.backup.local = { status: "error", error: error.message || "Local archive failed." };
-      local.analysis.push(report.backup.local);
+      await upsertAnalysisArchiveLocal(report, report.backup.local);
+      local.analysis.push({ ...report.backup.local, reportId: report.id });
       await addDiagnosticLog({
         level: "error",
         priority: "medium",
@@ -3354,10 +4314,12 @@ async function backupDateKeys(dateKeys, options = {}) {
     }
     try {
       report.backup.remote = await backupAnalysisReportToWebdav(report);
-      remote.analysis.push(report.backup.remote);
+      await upsertAnalysisArchiveRemote(report, report.backup.remote);
+      remote.analysis.push({ ...report.backup.remote, reportId: report.id });
     } catch (error) {
       report.backup.remote = { status: "error", error: error.message || "WebDAV backup failed." };
-      remote.analysis.push(report.backup.remote);
+      await upsertAnalysisArchiveRemote(report, report.backup.remote);
+      remote.analysis.push({ ...report.backup.remote, reportId: report.id });
       await addDiagnosticLog({
         level: "error",
         priority: "medium",
@@ -3381,7 +4343,7 @@ async function backupDateKeys(dateKeys, options = {}) {
   }
   await StorageUtils.setAnalysisReports(analysisReports);
 
-  return {
+  const result = {
     backedUpAt: Date.now(),
     dateKeys: normalizedDateKeys,
     local,
@@ -3389,6 +4351,8 @@ async function backupDateKeys(dateKeys, options = {}) {
     records: remote.records,
     analysis: remote.analysis
   };
+  await recordArchiveLastRun(options.trigger || "backup", flattenBackupResultForArchiveRun(result));
+  return result;
 }
 
 async function backupToWebdav() {
@@ -3479,15 +4443,15 @@ function backupResultError(result) {
   if (backupItemsHaveError(result?.remote?.analysis)) {
     return "Some analysis reports failed to mirror to WebDAV.";
   }
+  if (result?.local?.records?.status === "skipped") {
+    return result.local.records.reason || LOCAL_ARCHIVE_FOLDER_REQUIRED_MESSAGE;
+  }
   return "";
 }
 
 function successfulLocalRecordDateKeys(result) {
-  if (result?.local?.records?.status === "error") {
-    return [];
-  }
   return uniqueDateKeys((result?.local?.records?.results || [])
-    .filter((item) => item?.status !== "error")
+    .filter((item) => item?.status === "done")
     .map((item) => item.dateKey));
 }
 
@@ -3627,6 +4591,24 @@ async function testLocalArchive() {
       testedAt: Date.now(),
       nonce: crypto.randomUUID()
     });
+    if (result.status === "skipped") {
+      await addDiagnosticLog({
+        level: "warn",
+        priority: "medium",
+        source: "settings",
+        category: "configuration",
+        operation: "test_local_archive",
+        message: result.reason || LOCAL_ARCHIVE_FOLDER_REQUIRED_MESSAGE,
+        details: {
+          durationMs: Date.now() - startedAt,
+          mode: result.mode,
+          status: result.status,
+          relativePath: result.relativePath
+        }
+      });
+      return { ok: false, ...result };
+    }
+
     await addDiagnosticLog({
       level: "info",
       priority: "medium",
@@ -3639,8 +4621,7 @@ async function testLocalArchive() {
         mode: result.mode,
         status: result.status,
         relativePath: result.relativePath,
-        displayPath: result.displayPath,
-        fallbackReason: result.fallbackReason || ""
+        displayPath: result.displayPath
       }
     });
     return { ok: true, ...result };
@@ -3659,14 +4640,6 @@ async function testLocalArchive() {
     });
     throw error;
   }
-}
-
-async function openLocalArchiveDownload(downloadId) {
-  if (!Number.isInteger(downloadId)) {
-    throw new Error("This local archive item cannot be opened directly. Copy the local path instead.");
-  }
-  await chrome.downloads.show(downloadId);
-  return { ok: true };
 }
 
 async function testModel(target) {
@@ -4126,7 +5099,7 @@ chrome.idle.onStateChanged.addListener(async (idleState) => {
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (["GET_SETTINGS", "SAVE_SETTINGS", "GET_AUTO_BACKUP_STATUS", "TEST_MODEL", "TEST_LOCAL_ARCHIVE", "OPEN_LOCAL_ARCHIVE", "TEST_WEBDAV", "RUN_ANALYSIS", "GET_ANALYSIS_DATA", "GET_LOGS", "ADD_LOG", "CLEAR_LOGS", "EXPORT_LOGS"].includes(message?.type)) {
+  if (["GET_SETTINGS", "SAVE_SETTINGS", "GET_AUTO_BACKUP_STATUS", "GET_ARCHIVE_INDEX", "GET_ARCHIVE_STATUS", "RETRY_ARCHIVE_ENTRIES", "DELETE_ARCHIVE_ENTRIES", "FLUSH_LOCAL_ARCHIVE_PENDING", "TEST_MODEL", "TEST_LOCAL_ARCHIVE", "TEST_WEBDAV", "RUN_ANALYSIS", "GET_ANALYSIS_DATA", "DELETE_ANALYSIS_ARCHIVE", "GET_LOGS", "ADD_LOG", "CLEAR_LOGS", "EXPORT_LOGS"].includes(message?.type)) {
     (async () => {
       if (message.type === "GET_LOGS") {
         sendResponse({
@@ -4173,6 +5146,35 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         return;
       }
 
+      if (message.type === "GET_ARCHIVE_INDEX") {
+        sendResponse({
+          archiveIndex: await getArchiveIndexWithBackfill(),
+          archiveLastRun: await StorageUtils.getArchiveLastRun(),
+          archiveStatus: await getArchiveStatus()
+        });
+        return;
+      }
+
+      if (message.type === "GET_ARCHIVE_STATUS") {
+        sendResponse(await getArchiveStatus());
+        return;
+      }
+
+      if (message.type === "RETRY_ARCHIVE_ENTRIES") {
+        sendResponse(await retryArchiveEntries(message.entryIds || [], message.targets || message.target || "both", message.trigger || "retry"));
+        return;
+      }
+
+      if (message.type === "DELETE_ARCHIVE_ENTRIES") {
+        sendResponse(await deleteArchiveEntries(message.entryIds || [], message.targets || message.target || "both"));
+        return;
+      }
+
+      if (message.type === "FLUSH_LOCAL_ARCHIVE_PENDING") {
+        sendResponse(await flushLocalArchivePending());
+        return;
+      }
+
       if (message.type === "TEST_MODEL") {
         sendResponse(await testModel(message.target || "summary"));
         return;
@@ -4185,11 +5187,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       if (message.type === "TEST_LOCAL_ARCHIVE") {
         sendResponse(await testLocalArchive());
-        return;
-      }
-
-      if (message.type === "OPEN_LOCAL_ARCHIVE") {
-        sendResponse(await openLocalArchiveDownload(message.downloadId));
         return;
       }
 
@@ -4206,9 +5203,19 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           visitEvents: await StorageUtils.getVisitEvents(),
           analysisStatus: lastAnalysisStatus
         });
+        return;
+      }
+
+      if (message.type === "DELETE_ANALYSIS_ARCHIVE") {
+        if (message.localResult) {
+          sendResponse(await deleteAnalysisArchive(message.reportId, message.localResult));
+          return;
+        }
+        sendResponse(await deleteAnalysisArchiveFromPage(message.reportId));
+        return;
       }
     })().catch(async (error) => {
-      if (!["TEST_MODEL", "TEST_WEBDAV", "TEST_LOCAL_ARCHIVE", "RUN_ANALYSIS"].includes(message?.type)) {
+      if (!["TEST_MODEL", "TEST_WEBDAV", "TEST_LOCAL_ARCHIVE", "RUN_ANALYSIS", "DELETE_ANALYSIS_ARCHIVE", "RETRY_ARCHIVE_ENTRIES", "DELETE_ARCHIVE_ENTRIES", "FLUSH_LOCAL_ARCHIVE_PENDING"].includes(message?.type)) {
         await addDiagnosticLog({
           level: "error",
           priority: "high",
@@ -4276,11 +5283,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     if (message?.type === "TEST_LOCAL_ARCHIVE") {
       sendResponse(await testLocalArchive());
-      return;
-    }
-
-    if (message?.type === "OPEN_LOCAL_ARCHIVE") {
-      sendResponse(await openLocalArchiveDownload(message.downloadId));
       return;
     }
 

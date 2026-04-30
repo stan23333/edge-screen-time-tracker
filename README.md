@@ -51,7 +51,8 @@ One representative screenshot is shown for each primary page. Analysis reports a
 - Popup for quick daily awareness.
 - Dashboard for active share, open/active comparison, heatmaps, and per-site details.
 - Records page for browsing history, summary JSON, model status, and token usage.
-- Settings page for provider presets, prompts, API tests, ignored domains, local archive, WebDAV, and export.
+- Settings page for provider presets, prompts, API tests, ignored domains, local archive permission, WebDAV, and export.
+- Archive page for record JSON and analysis Markdown status, retries, uploads, local/WebDAV deletion, path copying, and remote opening.
 - Analysis page for day/week/month behavior reports with in-browser Markdown rendering, evidence charts, trends, and frequent themes.
 - Automatic page summaries through OpenAI-compatible chat completion APIs.
 - Screenshot fallback for pages where DOM text capture is blocked.
@@ -162,13 +163,7 @@ Notes:
 
 ## Local Archive and WebDAV Backup
 
-The local archive is the primary file library. WebDAV is an optional remote mirror that uses the same folder structure when configured.
-
-Default local archive path under the browser Downloads folder:
-
-```text
-Downloads/browser-tracker/
-```
+The local archive is the primary file library. Choose a local archive folder in Settings to let the extension write record JSON and analysis Markdown files silently without using the browser download manager. WebDAV is an optional remote mirror that uses the same folder structure when configured. Explicit export buttons still use the browser's normal download behavior because the user asked for a direct export.
 
 Archive structure:
 
@@ -180,6 +175,8 @@ browser-tracker/analysis/YYYY/MM/YYYY-MM-DD_to_YYYY-MM-DD_month_HHMMSS_reportid.
 ```
 
 Daily record files include daily stats, visit events, page summaries, matching analysis report metadata, timezone, schema version, export timestamp, and sanitized settings. Analysis files are Markdown reports.
+
+The Archive page keeps a unified index for record and analysis files. It shows local and WebDAV status separately, including pending, skipped, deleted, and error states. If local folder permission is missing or revoked, automatic archive writes are marked pending instead of falling back to Downloads. Reauthorizing the folder in Settings can flush pending local files.
 
 The local archive test writes a small nonce file. The WebDAV test performs a real `PUT`, `GET`, and `DELETE` cycle with a nonce payload.
 
@@ -208,7 +205,7 @@ External data transfer happens only when the user configures related features:
 
 - Page text or screenshot evidence is sent to the configured summary model when summarization runs.
 - Aggregated stats, visits, and summaries are sent to the configured analysis model when analysis runs.
-- Local archive files are written under the configured archive folder or the browser Downloads fallback.
+- Local archive files are written only to the user-selected archive folder; no automatic archive uses browser downloads.
 - Archive mirrors are uploaded only to the user-configured WebDAV endpoint.
 - JSON exports can contain private browsing history and page summaries.
 
@@ -233,6 +230,7 @@ edge-screen-time-tracker/
 ├── records/
 ├── settings/
 ├── analysis/
+├── archive/
 ├── utils/
 ├── assets/
 ├── docs/

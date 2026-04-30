@@ -51,7 +51,8 @@ Web Screen Time Tracker 是一个 Microsoft Edge / Chromium Manifest V3 浏览�
 - Popup 快速查看今日状态。
 - Dashboard 展示 active share、open/active 对比、热力图和站点详情。
 - Records 查看访问记录、Summary JSON、模型状态和 token usage。
-- Settings 配置模型供应商、提示词、API 测试、忽略域名、本地归档、WebDAV 和导出。
+- Settings 配置模型供应商、提示词、API 测试、忽略域名、本地归档权限、WebDAV 和导出。
+- Archive 集中管理 record JSON 和 analysis Markdown 的状态、补写、上传、本地/WebDAV 删除、路径复制和远端打开。
 - Analysis 生成日/周/月行为报告，支持浏览器内 Markdown 在线渲染、Evidence、Trend 和 Frequent themes。
 - 通过 OpenAI-compatible chat completions API 自动生成页面摘要。
 - 对 DOM 文本抽取失败的 blocked 页面支持截图 fallback。
@@ -162,13 +163,7 @@ analysis model 可以和 summary model 分开配置，因此可以用更便宜/�
 
 ## 本地归档与 WebDAV 备份
 
-本地归档是主要文件库。WebDAV 是可选远端镜像，配置后使用同一套目录结构备份一份。
-
-默认本地归档路径在浏览器 Downloads 目录下：
-
-```text
-Downloads/browser-tracker/
-```
+本地归档是主要文件库。在 Settings 中选择本地归档文件夹后，插件会静默写入 record JSON 和 analysis Markdown，不再通过浏览器下载管理器。WebDAV 是可选远端镜像，配置后使用同一套目录结构备份一份。显式 Export 按钮仍走浏览器正常下载，因为这是用户主动触发的直接导出。
 
 归档结构：
 
@@ -180,6 +175,8 @@ browser-tracker/analysis/YYYY/MM/YYYY-MM-DD_to_YYYY-MM-DD_month_HHMMSS_reportid.
 ```
 
 每日记录文件包含 daily stats、visit events、page summaries、匹配的 analysis report 元数据、timezone、schema version、export timestamp 和去敏后的 settings。分析文件保存为 Markdown 报告。
+
+Archive 页面维护统一索引，分别展示本地和 WebDAV 状态，包括 pending、skipped、deleted、error 等状态。如果本地文件夹权限丢失或被撤销，自动归档会进入 pending，不会 fallback 到 Downloads。用户在 Settings 里 Reauthorize 后，可以补写 pending 本地文件。
 
 本地归档测试会写入一个很小的 nonce 文件。WebDAV 测试会执行真实的 `PUT`、`GET`、`DELETE` nonce 请求。
 
@@ -208,7 +205,7 @@ browser-tracker/analysis/YYYY/MM/YYYY-MM-DD_to_YYYY-MM-DD_month_HHMMSS_reportid.
 
 - 页面文本或截图证据会在摘要运行时发送给配置的 summary model。
 - 聚合统计、访问记录和页面摘要会在分析运行时发送给配置的 analysis model。
-- 本地归档文件会写入用户配置的归档目录，或浏览器 Downloads fallback。
+- 本地归档文件只会写入用户选择的归档目录；自动归档不会使用浏览器下载。
 - 归档镜像只会上传到用户配置的 WebDAV endpoint。
 - JSON 导出可能包含私密浏览历史和页面摘要。
 
@@ -233,6 +230,7 @@ edge-screen-time-tracker/
 ├── records/
 ├── settings/
 ├── analysis/
+├── archive/
 ├── utils/
 ├── assets/
 ├── docs/

@@ -37,6 +37,16 @@ function allReports() {
     .sort((a, b) => b.createdAt - a.createdAt);
 }
 
+function upsertReport(report) {
+  reports[report.period] = reports[report.period] || [];
+  const index = reports[report.period].findIndex((item) => item.id === report.id);
+  if (index >= 0) {
+    reports[report.period][index] = report;
+  } else {
+    reports[report.period].unshift(report);
+  }
+}
+
 function renderReport(report) {
   selectedReportId = report.id;
   reportMetaEl.textContent = `${report.period} | ${report.startDate} to ${report.endDate} | ${new Date(report.createdAt).toLocaleString()}`;
@@ -53,6 +63,50 @@ function renderReport(report) {
 
 async function copyText(text) {
   await navigator.clipboard.writeText(text);
+}
+
+async function openLocalArchiveWithRepair(relativePath, entryId, button) {
+  const previewWindow = window.open("about:blank", "_blank");
+  if (previewWindow) {
+    previewWindow.opener = null;
+  }
+  try {
+    await LocalArchivePermission.openFile(relativePath, previewWindow);
+    return;
+  } catch (error) {
+    if (!LocalArchivePermission.isMissingFileError?.(error) || !entryId) {
+      if (previewWindow && !previewWindow.closed) {
+        previewWindow.close();
+      }
+      throw error;
+    }
+  }
+
+  const originalText = button.textContent;
+  button.textContent = "Re-archiving...";
+  const retry = await sendMessage({
+    type: "RETRY_ARCHIVE_ENTRIES",
+    entryIds: [entryId],
+    targets: "local",
+    trigger: "open_missing_local"
+  });
+  const failed = (retry.results || []).find((item) => item.target === "local" && !["done"].includes(item.status));
+  if (failed) {
+    if (previewWindow && !previewWindow.closed) {
+      previewWindow.close();
+    }
+    throw new Error(failed.message || "Local archive file is missing and could not be rebuilt.");
+  }
+  button.textContent = "Opening...";
+  try {
+    await LocalArchivePermission.openFile(relativePath, previewWindow);
+  } catch (error) {
+    if (previewWindow && !previewWindow.closed) {
+      previewWindow.close();
+    }
+    throw error;
+  }
+  button.textContent = originalText;
 }
 
 function backupStatusText(backup) {
@@ -84,14 +138,27 @@ function renderBackupInfo(report) {
   const openRemote = document.createElement("button");
   const copyLocal = document.createElement("button");
   const copyFolder = document.createElement("button");
+  const deleteArchive = document.createElement("button");
 
-  local.textContent = localInfo.displayPath
-    ? `Local: ${localInfo.displayPath}`
-    : "Local: Not archived yet.";
-  if (remoteInfo.remotePath) {
+  if (localInfo.status === "deleted") {
+    local.textContent = `Local: Deleted${localInfo.relativePath ? ` (${localInfo.relativePath})` : ""}`;
+  } else if (localInfo.displayPath) {
+    local.textContent = `Local: ${localInfo.displayPath}`;
+  } else if (localInfo.status === "pending") {
+    local.textContent = `Local: Pending${localInfo.reason ? ` - ${localInfo.reason}` : ""}`;
+  } else if (localInfo.skipped || localInfo.status === "skipped") {
+    local.textContent = `Local: ${localInfo.reason || "Choose a local archive folder in Settings."}`;
+  } else {
+    local.textContent = "Local: Not archived yet.";
+  }
+  if (remoteInfo.status === "deleted") {
+    remote.textContent = `Remote: Deleted${remoteInfo.remotePath ? ` (${remoteInfo.remotePath})` : ""}`;
+  } else if (remoteInfo.remotePath) {
     remote.textContent = `Remote: ${remoteInfo.remotePath}`;
   } else if (remoteInfo.status === "error" || remoteInfo.error) {
     remote.textContent = `Remote: ${remoteInfo.error || "WebDAV backup failed."}`;
+  } else if (remoteInfo.status === "pending") {
+    remote.textContent = `Remote: Pending${remoteInfo.reason ? ` - ${remoteInfo.reason}` : ""}`;
   } else if (remoteInfo.skipped || remoteInfo.status === "skipped") {
     remote.textContent = `Remote: ${remoteInfo.reason || "WebDAV is not configured."}`;
   } else {
@@ -100,27 +167,22 @@ function renderBackupInfo(report) {
   actions.className = "backupActions";
 
   openLocal.type = "button";
-  openLocal.className = "secondary";
-  openLocal.textContent = "Open Local";
-  openLocal.disabled = !Number.isInteger(localInfo.downloadId);
+  openLocal.className = "archiveAction openLocal";
+  openLocal.textContent = "Open Local Folder";
+  openLocal.disabled = !localInfo.relativePath || localInfo.status === "deleted";
   openLocal.addEventListener("click", async () => {
-    if (!Number.isInteger(localInfo.downloadId)) {
-      return;
-    }
-    try {
-      await sendMessage({ type: "OPEN_LOCAL_ARCHIVE", downloadId: localInfo.downloadId });
-    } catch (error) {
-      openLocal.textContent = error.message || "Cannot open";
-      setTimeout(() => {
-        openLocal.textContent = "Open Local";
-      }, 1600);
-    }
+    await copyText(localInfo.folderPath);
+    const originalText = openLocal.textContent;
+    openLocal.textContent = "Copied";
+    setTimeout(() => {
+      openLocal.textContent = originalText;
+    }, 1200);
   });
 
   openRemote.type = "button";
-  openRemote.className = "secondary";
+  openRemote.className = "archiveAction remote";
   openRemote.textContent = "Open Remote";
-  openRemote.disabled = !remoteInfo.remoteUrl;
+  openRemote.disabled = !remoteInfo.remoteUrl || remoteInfo.status === "deleted";
   openRemote.addEventListener("click", () => {
     if (remoteInfo.remoteUrl) {
       window.open(remoteInfo.remoteUrl, "_blank", "noopener");
@@ -128,19 +190,19 @@ function renderBackupInfo(report) {
   });
 
   copyLocal.type = "button";
-  copyLocal.className = "secondary";
-  copyLocal.textContent = "Copy Local Path";
+  copyLocal.className = "archiveAction copyFile";
+  copyLocal.textContent = "Copy File Path";
   copyLocal.disabled = !localInfo.displayPath;
   copyLocal.addEventListener("click", async () => {
     await copyText(localInfo.displayPath);
     copyLocal.textContent = "Copied";
     setTimeout(() => {
-      copyLocal.textContent = "Copy Local Path";
+      copyLocal.textContent = "Copy File Path";
     }, 1200);
   });
 
   copyFolder.type = "button";
-  copyFolder.className = "secondary";
+  copyFolder.className = "archiveAction copyFolder";
   copyFolder.textContent = "Copy Folder Path";
   copyFolder.disabled = !localInfo.folderPath;
   copyFolder.addEventListener("click", async () => {
@@ -151,7 +213,36 @@ function renderBackupInfo(report) {
     }, 1200);
   });
 
-  actions.append(openLocal, copyLocal, copyFolder, openRemote);
+  deleteArchive.type = "button";
+  deleteArchive.className = "archiveAction deleteArchive";
+  deleteArchive.textContent = "Delete Archive";
+  deleteArchive.disabled = (!localInfo.relativePath && !remoteInfo.remotePath)
+    || (localInfo.status === "deleted" && remoteInfo.status === "deleted");
+  deleteArchive.addEventListener("click", async () => {
+    if (!window.confirm("Delete this report archive from the local archive and WebDAV? The in-app report remains.")) {
+      return;
+    }
+
+    const originalText = deleteArchive.textContent;
+    deleteArchive.disabled = true;
+    deleteArchive.textContent = "Deleting...";
+    reportBackupEl.textContent = "Deleting local and WebDAV archive files...";
+    try {
+      const updated = await sendMessage({
+        type: "DELETE_ANALYSIS_ARCHIVE",
+        reportId: report.id
+      });
+      upsertReport(updated);
+      renderList();
+      renderReport(updated);
+    } catch (error) {
+      reportBackupEl.textContent = error.message || "Delete failed.";
+      deleteArchive.disabled = false;
+      deleteArchive.textContent = originalText;
+    }
+  });
+
+  actions.append(openLocal, copyLocal, copyFolder, openRemote, deleteArchive);
   reportBackupEl.append(remote, local, actions);
 }
 
@@ -526,8 +617,7 @@ document.querySelectorAll("[data-period]").forEach((button) => {
         period,
         endDateKey: endDateEl.value
       });
-      reports[period] = reports[period] || [];
-      reports[period].unshift(report);
+      upsertReport(report);
       selectedReportId = report.id;
       const startedAt = activeRun?.startedAt;
       activeRun = null;

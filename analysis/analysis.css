@@ -443,6 +443,40 @@ input {
   font-size: 12px;
 }
 
+.backupActions .archiveAction {
+  border-width: 1px;
+}
+
+.backupActions .openLocal {
+  border-color: #bfdbfe;
+  background: var(--blue-soft);
+  color: #1d4ed8;
+}
+
+.backupActions .copyFile {
+  border-color: #c7d2fe;
+  background: var(--purple-soft);
+  color: #6d28d9;
+}
+
+.backupActions .copyFolder {
+  border-color: #bbf7d0;
+  background: var(--green-soft);
+  color: #047857;
+}
+
+.backupActions .remote {
+  border-color: #fed7aa;
+  background: var(--peach-soft);
+  color: #b45309;
+}
+
+.backupActions .deleteArchive {
+  border-color: #fecaca;
+  background: #fff1f1;
+  color: #b91c1c;
+}
+
 .backupActions button:disabled {
   cursor: not-allowed;
   opacity: 0.48;

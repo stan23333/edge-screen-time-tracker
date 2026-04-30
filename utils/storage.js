@@ -37,8 +37,7 @@
       backupPath: "browser-tracker"
     },
     localArchive: {
-      mode: "downloads",
-      downloadsFolder: "browser-tracker",
+      mode: "",
       directoryName: "",
       directoryGrantedAt: 0
     },
@@ -63,6 +62,28 @@
     lastAttemptAt: 0,
     lastSuccessAt: 0,
     lastError: ""
+  };
+
+  const ARCHIVE_STATUSES = new Set(["pending", "done", "skipped", "missing", "deleted", "error"]);
+
+  const DEFAULT_ARCHIVE_INDEX = {
+    version: 1,
+    updatedAt: 0,
+    entries: {}
+  };
+
+  const DEFAULT_ARCHIVE_LAST_RUN = {
+    at: 0,
+    trigger: "",
+    summary: {
+      done: 0,
+      skipped: 0,
+      pending: 0,
+      error: 0,
+      deleted: 0,
+      missing: 0
+    },
+    results: []
   };
 
   function get(keys) {
@@ -91,6 +112,10 @@
   }
 
   function mergeSettings(settings) {
+    const localArchive = settings?.localArchive || {};
+    const hasDirectoryArchive = localArchive.mode === "directory"
+      && Boolean(localArchive.directoryName || localArchive.directoryGrantedAt);
+
     return {
       ...DEFAULT_SETTINGS,
       ...settings,
@@ -108,12 +133,9 @@
       },
       localArchive: {
         ...DEFAULT_SETTINGS.localArchive,
-        ...(settings?.localArchive || {}),
-        mode: settings?.localArchive?.mode === "directory" ? "directory" : "downloads",
-        downloadsFolder: String(settings?.localArchive?.downloadsFolder || DEFAULT_SETTINGS.localArchive.downloadsFolder)
-          .replace(/^\/+|\/+$/g, "")
-          .replace(/\.\./g, "")
-          .trim() || DEFAULT_SETTINGS.localArchive.downloadsFolder
+        mode: hasDirectoryArchive ? "directory" : "",
+        directoryName: hasDirectoryArchive ? String(localArchive.directoryName || "Selected folder").trim() || "Selected folder" : "",
+        directoryGrantedAt: hasDirectoryArchive ? Math.max(0, Math.floor(localArchive.directoryGrantedAt || 0)) : 0
       },
       autoBackup: {
         ...DEFAULT_SETTINGS.autoBackup,
@@ -155,6 +177,79 @@
       lastAttemptAt: Number.isFinite(Number(state?.lastAttemptAt)) ? Number(state.lastAttemptAt) : 0,
       lastSuccessAt: Number.isFinite(Number(state?.lastSuccessAt)) ? Number(state.lastSuccessAt) : 0,
       lastError: safeText(state?.lastError)
+    };
+  }
+
+  function normalizeArchiveStatus(status, fallback = "pending") {
+    const value = safeText(status, fallback);
+    return ARCHIVE_STATUSES.has(value) ? value : fallback;
+  }
+
+  function normalizeArchiveSide(side = {}) {
+    return {
+      status: normalizeArchiveStatus(side.status),
+      displayPath: safeText(side.displayPath),
+      folderPath: safeText(side.folderPath),
+      relativePath: safeText(side.relativePath),
+      remotePath: safeText(side.remotePath),
+      remoteUrl: safeText(side.remoteUrl),
+      backedUpAt: Number.isFinite(Number(side.backedUpAt)) ? Number(side.backedUpAt) : 0,
+      deletedAt: Number.isFinite(Number(side.deletedAt)) ? Number(side.deletedAt) : 0,
+      updatedAt: Number.isFinite(Number(side.updatedAt)) ? Number(side.updatedAt) : 0,
+      error: safeText(side.error),
+      reason: safeText(side.reason)
+    };
+  }
+
+  function normalizeArchiveEntry(entry = {}) {
+    const now = Date.now();
+    const kind = safeText(entry.kind);
+    const id = safeText(entry.id) || `${kind || "archive"}:${safeText(entry.reportId || entry.dateKey) || now}`;
+    return {
+      id,
+      kind: kind === "analysis" ? "analysis" : "record",
+      title: safeText(entry.title),
+      dateKey: safeText(entry.dateKey),
+      reportId: safeText(entry.reportId),
+      period: safeText(entry.period),
+      contentType: safeText(entry.contentType),
+      relativePath: safeText(entry.relativePath),
+      createdAt: Number.isFinite(Number(entry.createdAt)) ? Number(entry.createdAt) : now,
+      updatedAt: Number.isFinite(Number(entry.updatedAt)) ? Number(entry.updatedAt) : now,
+      local: normalizeArchiveSide(entry.local || {}),
+      remote: normalizeArchiveSide(entry.remote || {})
+    };
+  }
+
+  function mergeArchiveIndex(index = {}) {
+    const entries = {};
+    for (const [key, entry] of Object.entries(index?.entries || {})) {
+      const normalized = normalizeArchiveEntry({ id: key, ...entry });
+      entries[normalized.id] = normalized;
+    }
+
+    return {
+      version: 1,
+      updatedAt: Number.isFinite(Number(index?.updatedAt)) ? Number(index.updatedAt) : 0,
+      entries
+    };
+  }
+
+  function mergeArchiveLastRun(run = {}) {
+    const summary = {
+      ...DEFAULT_ARCHIVE_LAST_RUN.summary,
+      ...(run?.summary || {})
+    };
+    for (const key of Object.keys(summary)) {
+      summary[key] = Number.isFinite(Number(summary[key])) ? Number(summary[key]) : 0;
+    }
+    return {
+      ...DEFAULT_ARCHIVE_LAST_RUN,
+      ...(run || {}),
+      at: Number.isFinite(Number(run?.at)) ? Number(run.at) : 0,
+      trigger: safeText(run?.trigger),
+      summary,
+      results: Array.isArray(run?.results) ? run.results : []
     };
   }
 
@@ -201,6 +296,24 @@
 
   async function setAutoBackupState(autoBackupState) {
     await set({ autoBackupState: mergeAutoBackupState(autoBackupState) });
+  }
+
+  async function getArchiveIndex() {
+    const { archiveIndex = DEFAULT_ARCHIVE_INDEX } = await get({ archiveIndex: DEFAULT_ARCHIVE_INDEX });
+    return mergeArchiveIndex(archiveIndex);
+  }
+
+  async function setArchiveIndex(archiveIndex) {
+    await set({ archiveIndex: mergeArchiveIndex(archiveIndex) });
+  }
+
+  async function getArchiveLastRun() {
+    const { archiveLastRun = DEFAULT_ARCHIVE_LAST_RUN } = await get({ archiveLastRun: DEFAULT_ARCHIVE_LAST_RUN });
+    return mergeArchiveLastRun(archiveLastRun);
+  }
+
+  async function setArchiveLastRun(archiveLastRun) {
+    await set({ archiveLastRun: mergeArchiveLastRun(archiveLastRun) });
   }
 
   function safeText(value, fallback = "") {
@@ -256,6 +369,8 @@
     addDiagnosticLog,
     clearDiagnosticLogs,
     get,
+    getArchiveIndex,
+    getArchiveLastRun,
     getAnalysisReports,
     getAutoBackupState,
     getDailyStats,
@@ -265,6 +380,8 @@
     getState,
     getVisitEvents,
     set,
+    setArchiveIndex,
+    setArchiveLastRun,
     setAnalysisReports,
     setAutoBackupState,
     setDailyStats,

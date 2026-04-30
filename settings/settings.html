@@ -22,6 +22,7 @@
           <a class="appNavLink" href="../dashboard/dashboard.html">Dashboard</a>
           <a class="appNavLink" href="../records/records.html">Records</a>
           <a class="appNavLink" href="../analysis/analysis.html">Analysis</a>
+          <a class="appNavLink" href="../archive/archive.html">Archive</a>
           <a class="appNavLink" href="../logs/logs.html">Logs</a>
           <a class="appNavLink active" href="../settings/settings.html">Settings</a>
         </nav>
@@ -101,20 +102,30 @@
             <div class="sectionTop">
               <h2>Local Archive</h2>
               <div class="testRow">
-                <span id="localArchiveStatus">Default: Downloads/browser-tracker</span>
+                <span id="localArchiveStatus">Folder required</span>
                 <button id="testLocalArchive" type="button" class="secondary">Test</button>
               </div>
             </div>
-            <label>Downloads folder name<input id="localArchiveDownloadsFolder" type="text" placeholder="browser-tracker"></label>
             <div class="archiveDestination">
               <span>Current archive location</span>
-              <strong id="localArchiveDestination">Downloads/browser-tracker</strong>
+              <strong id="localArchiveDestination">No folder selected</strong>
             </div>
-            <p id="localArchiveModeNote" class="helperText">Using the default Downloads archive location.</p>
+            <div id="localArchivePermissionCard" class="permissionCard">
+              <div>
+                <span>Folder permission</span>
+                <strong id="localArchivePermissionStatus">Not selected</strong>
+                <p id="localArchivePermissionDetail">Choose a folder once to enable silent local archives.</p>
+              </div>
+              <button id="reauthorizeLocalArchive" type="button" class="secondary">Reauthorize</button>
+            </div>
+            <p id="localArchiveModeNote" class="helperText">Choose a local archive folder to enable silent automatic archives.</p>
             <label class="checkbox"><input id="autoBackup" type="checkbox" role="switch" checked> Auto backup when browser is idle</label>
             <p id="autoBackupStatus" class="helperText">No automatic backup has run yet.</p>
-            <button id="chooseLocalArchiveFolder" type="button" class="secondary">Choose local archive folder</button>
-            <p class="helperText">If your browser supports folder access, the extension will write to the chosen folder first and fall back to Downloads if permission is unavailable.</p>
+            <div class="archiveButtonRow">
+              <button id="chooseLocalArchiveFolder" type="button" class="secondary">Choose local archive folder</button>
+              <button id="flushLocalArchivePending" type="button" class="secondary">Flush pending local files</button>
+            </div>
+            <p class="helperText">Automatic archives write directly to this folder and do not use the browser download manager. WebDAV can still run if no local folder is selected.</p>
           </div>
 
           <div class="panel configSection">
@@ -152,10 +163,12 @@
           <p id="statusText">Ready.</p>
           <button id="summarizeNow" type="button">Summarize Current Page</button>
           <button id="backupNow" type="button" class="secondary">Manual Backup Now</button>
+          <div id="archiveRunDetails" class="archiveRunDetails" aria-live="polite"></div>
           <button id="exportData" type="button" class="secondary">Export Full JSON</button>
         </aside>
       </section>
     </main>
+    <script src="../utils/local-archive.js"></script>
     <script src="settings.js"></script>
   </body>
 </html>

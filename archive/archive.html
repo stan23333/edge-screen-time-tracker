@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Archive Center</title>
+    <link rel="stylesheet" href="archive.css">
+    <link rel="stylesheet" href="../shared/app-shell.css">
+  </head>
+  <body>
+    <main class="appShell">
+      <header class="appHeader">
+        <div class="brandBlock">
+          <img class="mark" src="../assets/icon128.png" alt="">
+          <div>
+            <p class="eyebrow">Web Screen Time Tracker</p>
+            <h1>Archive</h1>
+            <span class="appMeta">Local archive and WebDAV mirror management</span>
+          </div>
+        </div>
+        <nav class="appNav" aria-label="Main navigation">
+          <a class="appNavLink" href="../dashboard/dashboard.html">Dashboard</a>
+          <a class="appNavLink" href="../records/records.html">Records</a>
+          <a class="appNavLink" href="../analysis/analysis.html">Analysis</a>
+          <a class="appNavLink active" href="../archive/archive.html">Archive</a>
+          <a class="appNavLink" href="../logs/logs.html">Logs</a>
+          <a class="appNavLink" href="../settings/settings.html">Settings</a>
+        </nav>
+      </header>
+
+      <section class="archiveMetrics" aria-label="Archive metrics">
+        <div class="metricTile"><span>Total</span><strong id="metricTotal">0</strong></div>
+        <div class="metricTile pending"><span>Pending</span><strong id="metricPending">0</strong></div>
+        <div class="metricTile local"><span>Local Issues</span><strong id="metricLocalIssues">0</strong></div>
+        <div class="metricTile remote"><span>Remote Issues</span><strong id="metricRemoteIssues">0</strong></div>
+        <div class="metricTile deleted"><span>Deleted</span><strong id="metricDeleted">0</strong></div>
+      </section>
+
+      <section class="pageToolbar panel">
+        <label>Kind
+          <select id="kindFilter">
+            <option value="all">All</option>
+            <option value="record">Records</option>
+            <option value="analysis">Analysis</option>
+          </select>
+        </label>
+        <label>Status
+          <select id="statusFilter">
+            <option value="all">All</option>
+            <option value="pending">Pending</option>
+            <option value="done">Done</option>
+            <option value="skipped">Skipped</option>
+            <option value="error">Error</option>
+            <option value="deleted">Deleted</option>
+            <option value="missing">Missing</option>
+          </select>
+        </label>
+        <label>Date
+          <input id="dateFilter" type="date">
+        </label>
+        <label>Search
+          <input id="archiveSearch" type="search" placeholder="date, path, error, report id">
+        </label>
+        <div class="toolbarActions">
+          <button id="refreshArchive" type="button" class="secondary">Refresh</button>
+          <button id="flushPending" type="button">Flush Local Pending</button>
+        </div>
+      </section>
+
+      <section class="panel archiveStatus">
+        <div>
+          <span>Local folder</span>
+          <strong id="localStatus">Checking...</strong>
+        </div>
+        <div>
+          <span>Last run</span>
+          <strong id="lastRunStatus">No archive run yet.</strong>
+        </div>
+      </section>
+
+      <section class="panel archiveTablePanel">
+        <div class="archiveTableHeader">
+          <span>Item</span>
+          <span>Local</span>
+          <span>WebDAV</span>
+          <span>Path</span>
+          <span>Actions</span>
+        </div>
+        <div id="archiveRows" class="archiveRows"></div>
+      </section>
+    </main>
+    <script src="../utils/local-archive.js"></script>
+    <script src="archive.js"></script>
+  </body>
+</html>

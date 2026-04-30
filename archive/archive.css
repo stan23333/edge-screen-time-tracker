@@ -1,0 +1,290 @@
+:root {
+  color-scheme: light;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --bg: #f5f7fb;
+  --panel: #ffffff;
+  --ink: #18202f;
+  --muted: #687386;
+  --line: #dfe6f0;
+  --line-strong: #cbd5e1;
+  --blue: #2f6df6;
+  --blue-soft: #eaf1ff;
+  --green: #21a365;
+  --green-soft: #e7f7ee;
+  --purple: #7c3aed;
+  --purple-soft: #f1eaff;
+  --orange: #d97706;
+  --orange-soft: #fff1df;
+  --red: #dc2626;
+  --red-soft: #fff1f1;
+  --gray-soft: #f3f6fa;
+  --shadow: 0 18px 48px rgba(42, 51, 68, 0.10);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+}
+
+p,
+h1,
+h2 {
+  margin: 0;
+}
+
+.eyebrow {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.archiveMetrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.metricTile {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  background: #ffffff;
+  box-shadow: var(--shadow);
+}
+
+.metricTile.pending {
+  background: var(--purple-soft);
+}
+
+.metricTile.local {
+  background: var(--blue-soft);
+}
+
+.metricTile.remote {
+  background: var(--orange-soft);
+}
+
+.metricTile.deleted {
+  background: var(--red-soft);
+}
+
+.metricTile span,
+.archiveStatus span,
+.archiveTableHeader {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.metricTile strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 28px;
+}
+
+.archiveStatus {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 14px;
+}
+
+.archiveStatus div {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  background: #fbfcff;
+}
+
+.archiveStatus strong {
+  overflow-wrap: anywhere;
+}
+
+.archiveTablePanel {
+  padding: 0;
+  overflow: hidden;
+}
+
+.archiveTableHeader,
+.archiveRow {
+  display: grid;
+  grid-template-columns: minmax(190px, 1.1fr) minmax(130px, 0.7fr) minmax(130px, 0.7fr) minmax(220px, 1.2fr) minmax(280px, 1.3fr);
+  gap: 12px;
+  align-items: center;
+}
+
+.archiveTableHeader {
+  border-bottom: 1px solid var(--line);
+  padding: 12px 14px;
+  background: #f8fafc;
+}
+
+.archiveRows {
+  display: grid;
+}
+
+.archiveRow {
+  border-bottom: 1px solid var(--line);
+  padding: 14px;
+  background: #ffffff;
+}
+
+.archiveRow:last-child {
+  border-bottom: 0;
+}
+
+.archiveRow:hover {
+  background: #fbfcff;
+}
+
+.archiveItem {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.archiveItem strong,
+.pathText {
+  overflow-wrap: anywhere;
+}
+
+.archiveItem span,
+.pathText,
+.errorText {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.errorText {
+  color: #991b1b;
+}
+
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  min-height: 26px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 9px;
+  background: var(--gray-soft);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: capitalize;
+}
+
+.statusBadge.done {
+  border-color: rgba(33, 163, 101, 0.28);
+  background: var(--green-soft);
+  color: #047857;
+}
+
+.statusBadge.pending,
+.statusBadge.missing {
+  border-color: rgba(124, 58, 237, 0.24);
+  background: var(--purple-soft);
+  color: #6d28d9;
+}
+
+.statusBadge.skipped {
+  border-color: rgba(217, 119, 6, 0.24);
+  background: var(--orange-soft);
+  color: #b45309;
+}
+
+.statusBadge.error,
+.statusBadge.deleted {
+  border-color: rgba(220, 38, 38, 0.24);
+  background: var(--red-soft);
+  color: #b91c1c;
+}
+
+.rowActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.rowActions button {
+  min-height: 32px;
+  border-radius: 7px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+button.actionLocal {
+  border-color: var(--blue);
+  background: var(--blue);
+  color: #ffffff;
+}
+
+button.actionCopyFile {
+  border-color: var(--purple);
+  background: var(--purple);
+  color: #ffffff;
+}
+
+button.actionCopyFolder {
+  border-color: var(--green);
+  background: var(--green);
+  color: #ffffff;
+}
+
+button.actionRemote {
+  border-color: var(--orange);
+  background: var(--orange);
+  color: #ffffff;
+}
+
+button.actionDelete {
+  border-color: var(--red);
+  background: var(--red);
+  color: #ffffff;
+}
+
+.emptyState {
+  padding: 22px;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+@media (max-width: 1080px) {
+  .archiveMetrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .archiveTableHeader {
+    display: none;
+  }
+
+  .archiveRow {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+}
+
+@media (max-width: 680px) {
+  .archiveMetrics,
+  .archiveStatus {
+    grid-template-columns: 1fr;
+  }
+
+  .rowActions button {
+    flex: 1 1 140px;
+  }
+}

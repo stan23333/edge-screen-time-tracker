@@ -17,7 +17,6 @@
     "activeTab",
     "contextMenus",
     "notifications",
-    "downloads",
     "debugger"
   ],
   "host_permissions": [

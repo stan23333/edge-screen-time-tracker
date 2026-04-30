@@ -81,8 +81,8 @@ body {
 
 .appNav {
   display: grid;
-  grid-template-columns: repeat(5, minmax(108px, 1fr));
-  flex: 0 1 650px;
+  grid-template-columns: repeat(6, minmax(96px, 1fr));
+  flex: 0 1 760px;
   justify-content: end;
   gap: 10px;
 }
@@ -222,7 +222,7 @@ select {
   .appNav {
     width: 100%;
     flex-basis: auto;
-    grid-template-columns: repeat(5, minmax(96px, 1fr));
+    grid-template-columns: repeat(6, minmax(88px, 1fr));
   }
 
   .appNavLink {

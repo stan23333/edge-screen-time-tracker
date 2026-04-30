@@ -277,6 +277,93 @@ label {
   overflow-wrap: anywhere;
 }
 
+.permissionCard {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid rgba(203, 211, 225, 0.78);
+  border-radius: 10px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.permissionCard span,
+.archiveRunDetails span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.permissionCard strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 15px;
+}
+
+.permissionCard p {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.permissionCard.granted {
+  border-color: rgba(22, 163, 74, 0.26);
+  background: rgba(231, 247, 238, 0.78);
+}
+
+.permissionCard.needs,
+.permissionCard.failed {
+  border-color: rgba(220, 38, 38, 0.24);
+  background: rgba(255, 241, 241, 0.78);
+}
+
+.archiveButtonRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.archiveRunDetails {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  background: #fbfcff;
+}
+
+.archiveRunDetails:empty {
+  display: none;
+}
+
+.archiveRunDetails ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.archiveRunDetails li {
+  display: grid;
+  gap: 2px;
+  border-top: 1px solid rgba(203, 211, 225, 0.62);
+  padding-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.archiveRunDetails strong {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
 .light {
   width: 10px;
   height: 10px;

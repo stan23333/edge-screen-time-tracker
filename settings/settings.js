@@ -14,6 +14,12 @@ const webdavTestLightEl = document.getElementById("webdavTestLight");
 const localArchiveStatusEl = document.getElementById("localArchiveStatus");
 const localArchiveDestinationEl = document.getElementById("localArchiveDestination");
 const localArchiveModeNoteEl = document.getElementById("localArchiveModeNote");
+const localArchivePermissionCardEl = document.getElementById("localArchivePermissionCard");
+const localArchivePermissionStatusEl = document.getElementById("localArchivePermissionStatus");
+const localArchivePermissionDetailEl = document.getElementById("localArchivePermissionDetail");
+const reauthorizeLocalArchiveEl = document.getElementById("reauthorizeLocalArchive");
+const flushLocalArchivePendingEl = document.getElementById("flushLocalArchivePending");
+const archiveRunDetailsEl = document.getElementById("archiveRunDetails");
 const autoBackupStatusEl = document.getElementById("autoBackupStatus");
 
 const fields = {
@@ -35,7 +41,6 @@ const fields = {
   screenshotAuthorizedDomains: document.getElementById("screenshotAuthorizedDomains"),
   screenshotPromptedDomains: document.getElementById("screenshotPromptedDomains"),
   ignoredDomains: document.getElementById("ignoredDomains"),
-  localArchiveDownloadsFolder: document.getElementById("localArchiveDownloadsFolder"),
   autoBackup: document.getElementById("autoBackup"),
   webdavUrl: document.getElementById("webdavUrl"),
   webdavUsername: document.getElementById("webdavUsername"),
@@ -51,33 +56,6 @@ const PROVIDER_BASE_URLS = {
   siliconflow: "https://api.siliconflow.cn/v1",
   ollama: "http://localhost:11434/v1"
 };
-
-const LOCAL_ARCHIVE_DB = "web-screen-time-tracker-local-archive";
-const LOCAL_ARCHIVE_STORE = "handles";
-const LOCAL_ARCHIVE_HANDLE_KEY = "directory";
-
-function openLocalArchiveDb() {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(LOCAL_ARCHIVE_DB, 1);
-    request.onupgradeneeded = () => {
-      if (!request.result.objectStoreNames.contains(LOCAL_ARCHIVE_STORE)) {
-        request.result.createObjectStore(LOCAL_ARCHIVE_STORE);
-      }
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-
-async function setDirectoryHandle(handle) {
-  const db = await openLocalArchiveDb();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(LOCAL_ARCHIVE_STORE, "readwrite");
-    transaction.objectStore(LOCAL_ARCHIVE_STORE).put(handle, LOCAL_ARCHIVE_HANDLE_KEY);
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error);
-  });
-}
 
 function endpointFromBaseUrl(baseUrl) {
   const normalized = String(baseUrl || "").trim().replace(/\/+$/, "");
@@ -137,25 +115,100 @@ function renderAutoBackupStatus(state = {}) {
     : "No automatic backup has run yet.";
 }
 
-function downloadsArchivePath(settings) {
-  return `Downloads/${settings?.localArchive?.downloadsFolder || "browser-tracker"}`;
-}
-
 function renderLocalArchiveLocation(settings) {
-  const downloadsPath = downloadsArchivePath(settings);
   if (settings.localArchive?.mode === "directory") {
     const folderName = settings.localArchive.directoryName || "Selected folder";
     localArchiveStatusEl.textContent = `Selected: ${folderName}`;
     localArchiveDestinationEl.textContent = folderName;
-    localArchiveModeNoteEl.textContent = `Primary location is the selected folder. Fallback is ${downloadsPath}.`;
+    localArchiveModeNoteEl.textContent = "Automatic archives write directly to the selected folder without browser downloads.";
     chooseLocalArchiveFolderEl.textContent = "Change archive folder";
     return;
   }
 
-  localArchiveStatusEl.textContent = `Default: ${downloadsPath}`;
-  localArchiveDestinationEl.textContent = downloadsPath;
-  localArchiveModeNoteEl.textContent = "Using the default Downloads archive location.";
+  localArchiveStatusEl.textContent = "Folder required";
+  localArchiveDestinationEl.textContent = "No folder selected";
+  localArchiveModeNoteEl.textContent = "Choose a local archive folder to enable silent automatic archives. Until then, local archive writes are skipped.";
   chooseLocalArchiveFolderEl.textContent = "Choose local archive folder";
+}
+
+function renderLocalArchivePermission(status = {}) {
+  localArchivePermissionCardEl.classList.remove("granted", "needs", "failed");
+  if (status.status === "granted") {
+    localArchivePermissionCardEl.classList.add("granted");
+    localArchivePermissionStatusEl.textContent = "Granted";
+    localArchivePermissionDetailEl.textContent = `${status.name || "Selected folder"} is available for silent archive writes.`;
+    reauthorizeLocalArchiveEl.disabled = false;
+    flushLocalArchivePendingEl.disabled = false;
+    return;
+  }
+
+  if (status.status === "needs_reauthorize") {
+    localArchivePermissionCardEl.classList.add("needs");
+    localArchivePermissionStatusEl.textContent = "Needs reauthorize";
+    localArchivePermissionDetailEl.textContent = status.reason || "Click Reauthorize to restore local archive writes.";
+    reauthorizeLocalArchiveEl.disabled = false;
+    flushLocalArchivePendingEl.disabled = false;
+    return;
+  }
+
+  if (status.status === "write_failed") {
+    localArchivePermissionCardEl.classList.add("failed");
+    localArchivePermissionStatusEl.textContent = "Write failed";
+    localArchivePermissionDetailEl.textContent = status.reason || "The selected folder could not be used.";
+    reauthorizeLocalArchiveEl.disabled = false;
+    flushLocalArchivePendingEl.disabled = false;
+    return;
+  }
+
+  localArchivePermissionStatusEl.textContent = "Not selected";
+  localArchivePermissionDetailEl.textContent = "Choose a local archive folder once to enable silent local archives.";
+  reauthorizeLocalArchiveEl.disabled = true;
+  flushLocalArchivePendingEl.disabled = true;
+}
+
+function renderArchiveRunDetails(run = {}) {
+  archiveRunDetailsEl.textContent = "";
+  const results = Array.isArray(run.results) ? run.results : [];
+  if (!run.at && !results.length) {
+    return;
+  }
+
+  const label = document.createElement("span");
+  label.textContent = run.at
+    ? `Last archive run: ${new Date(run.at).toLocaleString()}`
+    : "Archive results";
+  const summary = document.createElement("strong");
+  const counts = run.summary || {};
+  summary.textContent = `done ${counts.done || 0} · pending ${counts.pending || 0} · skipped ${counts.skipped || 0} · error ${counts.error || 0}`;
+  archiveRunDetailsEl.append(label, summary);
+
+  if (results.length) {
+    const list = document.createElement("ul");
+    for (const item of results.slice(0, 8)) {
+      const row = document.createElement("li");
+      const title = document.createElement("strong");
+      const detail = document.createElement("span");
+      title.textContent = `${item.kind || "archive"} / ${item.target || "target"}: ${item.status || "unknown"}`;
+      detail.textContent = item.message || item.path || item.entryId || "";
+      row.append(title, detail);
+      list.append(row);
+    }
+    archiveRunDetailsEl.append(list);
+  }
+}
+
+async function refreshArchiveStatus() {
+  try {
+    const browserStatus = await LocalArchivePermission.permissionStatus();
+    const archiveStatus = await sendMessage({ type: "GET_ARCHIVE_STATUS" });
+    renderLocalArchivePermission(browserStatus.status === "not_selected" ? archiveStatus.localArchive : browserStatus);
+    renderArchiveRunDetails(archiveStatus.archiveLastRun);
+  } catch (error) {
+    renderLocalArchivePermission({
+      status: "write_failed",
+      reason: error.message || "Local archive status is unavailable."
+    });
+  }
 }
 
 async function refreshAutoBackupStatus() {
@@ -186,7 +239,6 @@ function fillForm(settings) {
   fields.screenshotAuthorizedDomains.value = (settings.capture.screenshotAuthorizedDomains || []).join("\n");
   fields.screenshotPromptedDomains.value = Object.keys(settings.capture.screenshotPromptedDomains || {}).sort().join("\n");
   fields.ignoredDomains.value = (settings.ignoredDomains || []).join("\n");
-  fields.localArchiveDownloadsFolder.value = settings.localArchive?.downloadsFolder || "browser-tracker";
   fields.autoBackup.checked = settings.autoBackup?.enabled !== false;
   renderLocalArchiveLocation(settings);
   fields.webdavUrl.value = settings.webdav.url;
@@ -233,8 +285,7 @@ function readForm() {
       .map((domain) => domain.trim())
       .filter(Boolean),
     localArchive: {
-      ...(currentSettings?.localArchive || {}),
-      downloadsFolder: fields.localArchiveDownloadsFolder.value.trim() || "browser-tracker"
+      ...(currentSettings?.localArchive || {})
     },
     autoBackup: {
       enabled: fields.autoBackup.checked
@@ -276,6 +327,7 @@ function downloadJson(filename, data) {
 async function loadSettings() {
   fillForm(await sendMessage({ type: "GET_SETTINGS" }));
   await refreshAutoBackupStatus();
+  await refreshArchiveStatus();
 }
 
 formEl.addEventListener("submit", async (event) => {
@@ -284,6 +336,7 @@ formEl.addEventListener("submit", async (event) => {
   try {
     fillForm(await sendMessage({ type: "SAVE_SETTINGS", settings: readForm() }));
     await refreshAutoBackupStatus();
+    await refreshArchiveStatus();
     setStatus("Settings saved.");
   } catch (error) {
     setStatus(error.message || "Failed to save settings.");
@@ -314,13 +367,15 @@ fields.autoBackup.addEventListener("change", async () => {
 backupNowEl.addEventListener("click", async () => {
   setStatus("Running manual archive and WebDAV backup...");
   try {
-    const result = await sendMessage({ type: "BACKUP_WEBDAV" });
-    const localRecordCount = result.local?.records?.results?.length || 0;
-    const localAnalysisCount = result.local?.analysis?.length || 0;
-    const remoteRecordCount = result.remote?.records?.results?.length || 0;
-    const remoteAnalysisCount = result.remote?.analysis?.length || 0;
-    const remoteNote = result.remote?.records?.skipped ? " WebDAV is not configured." : "";
-    setStatus(`Archive completed: ${localRecordCount} local record files, ${localAnalysisCount} local analysis files; ${remoteRecordCount} remote record files, ${remoteAnalysisCount} remote analysis files.${remoteNote}`);
+    await sendMessage({ type: "BACKUP_WEBDAV" });
+    const status = await sendMessage({ type: "GET_ARCHIVE_STATUS" });
+    renderArchiveRunDetails(status.archiveLastRun);
+    await refreshAutoBackupStatus();
+    await refreshArchiveStatus();
+    const pending = status.archiveLastRun?.summary?.pending || 0;
+    const errors = status.archiveLastRun?.summary?.error || 0;
+    const skipped = status.archiveLastRun?.summary?.skipped || 0;
+    setStatus(`Manual archive finished. Done ${status.archiveLastRun?.summary?.done || 0}, pending ${pending}, skipped ${skipped}, errors ${errors}.`);
   } catch (error) {
     setStatus(error.message || "Archive failed.");
   }
@@ -391,18 +446,14 @@ testAnalysisModelEl.addEventListener("click", async () => {
 
 chooseLocalArchiveFolderEl.addEventListener("click", async () => {
   if (!window.showDirectoryPicker) {
-    setStatus("Folder selection is not supported here. The extension will use the Downloads fallback.");
-    localArchiveStatusEl.textContent = "Downloads fallback";
+    setStatus("Folder selection is not supported here, so silent local archives are unavailable.");
+    localArchiveStatusEl.textContent = "Folder unavailable";
     return;
   }
 
   try {
     const handle = await window.showDirectoryPicker({ mode: "readwrite" });
-    const permission = await handle.requestPermission?.({ mode: "readwrite" });
-    if (permission && permission !== "granted") {
-      throw new Error("Folder permission was not granted.");
-    }
-    await setDirectoryHandle(handle);
+    await LocalArchivePermission.grantDirectoryHandle(handle);
     const settings = readForm();
     settings.localArchive = {
       ...settings.localArchive,
@@ -411,9 +462,43 @@ chooseLocalArchiveFolderEl.addEventListener("click", async () => {
       directoryGrantedAt: Date.now()
     };
     fillForm(await sendMessage({ type: "SAVE_SETTINGS", settings }));
-    setStatus(`Local archive folder selected: ${handle.name || "Selected folder"}.`);
+    const flush = await sendMessage({ type: "FLUSH_LOCAL_ARCHIVE_PENDING" });
+    renderArchiveRunDetails(flush.archiveLastRun);
+    await refreshArchiveStatus();
+    setStatus(`Local archive folder selected: ${handle.name || "Selected folder"}. Pending local files were checked.`);
   } catch (error) {
     setStatus(error.message || "Failed to select local archive folder.");
+  }
+});
+
+reauthorizeLocalArchiveEl.addEventListener("click", async () => {
+  setStatus("Reauthorizing local archive folder...");
+  try {
+    const permission = await LocalArchivePermission.reauthorize();
+    if (!permission.ok) {
+      setStatus(permission.reason || "Local archive folder permission is not granted.");
+      await refreshArchiveStatus();
+      return;
+    }
+    const flush = await sendMessage({ type: "FLUSH_LOCAL_ARCHIVE_PENDING" });
+    renderArchiveRunDetails(flush.archiveLastRun);
+    await refreshArchiveStatus();
+    setStatus("Local archive permission restored. Pending local files were checked.");
+  } catch (error) {
+    setStatus(error.message || "Failed to reauthorize local archive folder.");
+    await refreshArchiveStatus();
+  }
+});
+
+flushLocalArchivePendingEl.addEventListener("click", async () => {
+  setStatus("Checking pending local archive files...");
+  try {
+    const flush = await sendMessage({ type: "FLUSH_LOCAL_ARCHIVE_PENDING" });
+    renderArchiveRunDetails(flush.archiveLastRun);
+    await refreshArchiveStatus();
+    setStatus(`Pending local archive check finished. Done ${flush.archiveLastRun?.summary?.done || 0}, pending ${flush.archiveLastRun?.summary?.pending || 0}, errors ${flush.archiveLastRun?.summary?.error || 0}.`);
+  } catch (error) {
+    setStatus(error.message || "Pending local archive check failed.");
   }
 });
 
@@ -422,8 +507,12 @@ testLocalArchiveEl.addEventListener("click", async () => {
     await saveBeforeTest();
     const result = await sendMessage({ type: "TEST_LOCAL_ARCHIVE" });
     renderLocalArchiveLocation(currentSettings);
-    const fallbackNote = result.status === "fallback" ? ` Fallback reason: ${result.fallbackReason}` : "";
-    setStatus(`Local archive test passed: ${result.displayPath || result.relativePath}.${fallbackNote}`);
+    await refreshArchiveStatus();
+    if (result.status === "skipped") {
+      setStatus(result.reason || "Choose a local archive folder before testing local archives.");
+      return;
+    }
+    setStatus(`Local archive test passed: ${result.displayPath || result.relativePath}.`);
   }).catch((error) => {
     setStatus(error.message || "Local archive test failed.");
   });
