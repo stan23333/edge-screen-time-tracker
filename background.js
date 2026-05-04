@@ -4651,13 +4651,14 @@ async function testModel(target) {
 
   try {
     if (target === "analysis") {
+      const expected = `ANALYSIS_TEST_${nonce}`;
       const result = await callChatModel(
         config,
-        `Reply with exactly this token and no other text: ANALYSIS_TEST_${nonce}`,
-        "Connectivity test.",
-        { maxTokens: 32, fast: true, timeoutMs: 10 * 1000 }
+        "You are running a connectivity test. Reply with exactly the requested token and no other text.",
+        `Reply with exactly this token and no other text: ${expected}`,
+        { maxTokens: 64, fast: true, timeoutMs: 10 * 1000 }
       );
-      if (result.text.trim() !== `ANALYSIS_TEST_${nonce}`) {
+      if (result.text.trim() !== expected) {
         const error = new Error("Analysis model returned text, but not the expected test response.");
         error.diagnostic = {
           responseTextExcerpt: result.text.slice(0, LOG_RESPONSE_EXCERPT_CHARS),
@@ -4688,10 +4689,11 @@ async function testModel(target) {
       };
     }
 
+    const expectedSummaryJson = `{"summary":"SUMMARY_TEST_${nonce}","topics":["api-test"],"contentType":"other","intent":"test","keyPoints":["connectivity"],"confidence":1}`;
     const result = await callChatModel(
       config,
-      `Return only this compact JSON and no markdown: {"summary":"SUMMARY_TEST_${nonce}","topics":["api-test"],"contentType":"other","intent":"test","keyPoints":["connectivity"],"confidence":1}`,
-      "Connectivity test.",
+      "You are running a connectivity test. Return only the requested compact JSON object and no markdown.",
+      `Return only this compact JSON and no markdown: ${expectedSummaryJson}`,
       { json: true, maxTokens: 96, fast: true, timeoutMs: 10 * 1000 }
     );
     const resultText = result.text;
